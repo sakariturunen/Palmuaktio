@@ -1,0 +1,2825 @@
+<!DOCTYPE html>
+<html lang="fi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Talokartta — Pähkinärinne 2026</title>
+
+  <!-- Leaflet 1.9.4 -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- Supabase JS (CDN, no build step) -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: 14px;
+      background: #f0f0f0;
+      overflow: hidden;
+    }
+
+    /* ── Stats bar ─────────────────────────────────────── */
+    #stats-bar {
+      height: 46px;
+      background: #2c3e50;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      padding: 0 10px;
+      gap: 6px;
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+    #stats-title {
+      font-weight: 700;
+      font-size: 13px;
+      white-space: nowrap;
+      letter-spacing: .02em;
+      margin-right: 4px;
+    }
+    #stats-counts {
+      display: flex;
+      gap: 5px;
+      flex: 1;
+      flex-wrap: wrap;
+      align-items: center;
+      overflow: hidden;
+    }
+    .stat-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: rgba(255,255,255,.13);
+      border-radius: 12px;
+      padding: 2px 8px;
+      font-size: 11px;
+      white-space: nowrap;
+    }
+    .stat-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      display: inline-block;
+      flex-shrink: 0;
+    }
+    #stats-buttons { display: flex; gap: 4px; flex-shrink: 0; }
+    #stats-buttons button {
+      background: rgba(255,255,255,.18);
+      border: none; color: #fff;
+      border-radius: 6px;
+      padding: 4px 8px;
+      cursor: pointer;
+      font-size: 15px;
+      line-height: 1;
+    }
+    #stats-buttons button:hover { background: rgba(255,255,255,.32); }
+
+    /* ── Main layout ───────────────────────────────────── */
+    #main {
+      display: flex;
+      height: calc(100vh - 46px);
+      position: relative;
+    }
+
+    #map { flex: 1; min-width: 0; }
+
+    /* ── Sidebar ───────────────────────────────────────── */
+    #sidebar {
+      width: 300px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      background: #fff;
+      border-left: 1px solid #ddd;
+      overflow: hidden;
+    }
+    #sidebar-header {
+      padding: 10px 12px 6px;
+      border-bottom: 1px solid #eee;
+      flex-shrink: 0;
+    }
+    #sidebar-header h2 {
+      font-size: 13px;
+      font-weight: 700;
+      color: #2c3e50;
+      margin-bottom: 6px;
+    }
+    #search-input {
+      width: 100%;
+      padding: 6px 10px;
+      border: 1.5px solid #ddd;
+      border-radius: 8px;
+      font-size: 12px;
+      outline: none;
+    }
+    #search-input:focus { border-color: #2c3e50; }
+    #filter-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      padding: 6px 10px 8px;
+      border-bottom: 1px solid #eee;
+      flex-shrink: 0;
+    }
+    .filter-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      border: 1.5px solid #ddd;
+      border-radius: 14px;
+      padding: 3px 9px;
+      font-size: 11px;
+      cursor: pointer;
+      background: #fff;
+      transition: background .12s, border-color .12s;
+      white-space: nowrap;
+    }
+    .filter-chip:hover { border-color: #999; }
+    .filter-chip.active {
+      background: #2c3e50;
+      color: #fff;
+      border-color: #2c3e50;
+    }
+    .chip-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+
+    /* ── Map pick mode ────────────────────────────────── */
+    #pick-banner {
+      display: none;
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      z-index: 900;
+      background: rgba(44,62,80,.92);
+      color: #fff;
+      padding: 10px 16px;
+      text-align: center;
+      font-size: 13px;
+      font-weight: 500;
+      gap: 10px;
+      align-items: center;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    #pick-banner.visible { display: flex; }
+    #pick-banner-text { flex: 1; min-width: 180px; }
+    .pick-btn {
+      border: none;
+      border-radius: 6px;
+      padding: 5px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      color: #fff;
+    }
+    .pick-btn-confirm { background: #22c55e; }
+    .pick-btn-confirm:hover { background: #16a34a; }
+    .pick-btn-confirm:disabled { background: #6b7280; cursor: not-allowed; }
+    .pick-btn-cancel { background: #6b7280; }
+    .pick-btn-cancel:hover { background: #4b5563; }
+    #map.pick-active { cursor: crosshair !important; }
+    #map.pick-active .leaflet-container { cursor: crosshair !important; }
+
+    /* ── Progress bar ─────────────────────────────────── */
+    #progress-section {
+      padding: 8px 12px;
+      border-bottom: 1px solid #eee;
+      flex-shrink: 0;
+    }
+    #progress-label {
+      font-size: 11px;
+      color: #555;
+      margin-bottom: 4px;
+      font-weight: 600;
+    }
+    #progress-bar-bg {
+      height: 8px;
+      background: #e5e7eb;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    #progress-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #22C55E, #16a34a);
+      border-radius: 4px;
+      transition: width .4s ease;
+    }
+
+    /* ── Mobile sidebar toggle ────────────────────────── */
+    #sidebar-toggle {
+      display: none;
+      position: fixed;
+      bottom: 14px;
+      right: 14px;
+      z-index: 1000;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: #2c3e50;
+      color: #fff;
+      border: none;
+      font-size: 20px;
+      box-shadow: 0 2px 8px rgba(0,0,0,.3);
+      cursor: pointer;
+      line-height: 1;
+    }
+
+    #building-list { flex: 1; overflow-y: auto; }
+
+    .building-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 12px;
+      border-bottom: 1px solid #f2f2f2;
+      cursor: pointer;
+      transition: background .1s;
+    }
+    .building-item:hover { background: #f7f7f7; }
+    .status-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      border: 1.5px solid rgba(0,0,0,.08);
+    }
+    .building-addr { font-size: 13px; font-weight: 500; flex: 1; min-width: 0; }
+    .building-rappu-dots {
+      display: flex; gap: 2px; align-items: center; flex-shrink: 0;
+    }
+    .rappu-mini-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+    }
+
+    /* ── Loading overlay ───────────────────────────────── */
+    #loading-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(255,255,255,.88);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      gap: 14px;
+    }
+    #loading-overlay.hidden { display: none; }
+    .spinner {
+      width: 38px; height: 38px;
+      border: 4px solid #ddd;
+      border-top-color: #2c3e50;
+      border-radius: 50%;
+      animation: spin .75s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #loading-text { font-size: 13px; color: #666; }
+
+    /* ── Error banner ──────────────────────────────────── */
+    #error-banner {
+      display: none;
+      background: #e74c3c;
+      color: #fff;
+      padding: 8px 14px;
+      font-size: 13px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+
+    /* ── Popup ─────────────────────────────────────────── */
+    .popup-title  { font-weight: 700; font-size: 14px; margin-bottom: 5px; }
+    .popup-badge  {
+      display: inline-block;
+      border-radius: 10px;
+      padding: 2px 9px;
+      font-size: 11px;
+      color: #fff;
+      margin-bottom: 8px;
+    }
+    .popup-rappu-summary {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-bottom: 8px;
+      font-size: 12px;
+    }
+    .popup-rappu-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+    }
+    .popup-rappu-item .rdot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    .popup-history { margin-bottom: 8px; }
+    .popup-history table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    .popup-history th { color: #aaa; font-weight: 500; text-align: left; padding: 0 3px 3px; }
+    .popup-history td { padding: 2px 3px; vertical-align: top; color: #444; }
+    .popup-history tbody tr:not(:last-child) td { border-bottom: 1px solid #f0f0f0; }
+    .popup-no-visits { font-size: 11px; color: #bbb; margin-bottom: 8px; }
+    .popup-links { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; font-size: 12px; }
+    .popup-links a.gmaps { color: #3498db; text-decoration: none; }
+    .popup-links a.gmaps:hover { text-decoration: underline; }
+
+    /* ── Popup buttons ────────────────────────────────── */
+    .popup-btn {
+      display: inline-block;
+      border: none;
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 11px;
+      cursor: pointer;
+      text-decoration: none;
+      color: #fff;
+    }
+    .popup-btn-report { background: #27ae60; }
+    .popup-btn-report:hover { background: #219a52; }
+
+    /* ── Taloraportti form ────────────────────────────── */
+    .report-form {
+      margin-top: 8px;
+      border-top: 1px solid #eee;
+      padding-top: 8px;
+    }
+    .report-form label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      color: #555;
+      margin: 6px 0 2px;
+    }
+    .report-form label:first-child { margin-top: 0; }
+    .report-form input[type="text"],
+    .report-form input[type="number"],
+    .report-form select,
+    .report-form textarea {
+      width: 100%;
+      padding: 5px 8px;
+      border: 1.5px solid #ddd;
+      border-radius: 6px;
+      font-size: 12px;
+      font-family: inherit;
+      outline: none;
+    }
+    .report-form input:focus,
+    .report-form select:focus,
+    .report-form textarea:focus { border-color: #27ae60; }
+    .report-form textarea { resize: vertical; min-height: 40px; }
+    .report-form .radio-group {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      font-size: 12px;
+    }
+    .report-form .radio-group label {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-weight: 400;
+      color: #333;
+      margin: 0;
+      cursor: pointer;
+    }
+    .report-form .radio-group input[type="radio"] { width: auto; margin: 0; }
+    .report-form .submit-btn {
+      margin-top: 8px;
+      width: 100%;
+      padding: 7px;
+      background: #27ae60;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .report-form .submit-btn:hover { background: #219a52; }
+    .report-form .submit-btn:disabled { background: #999; cursor: not-allowed; }
+    .report-success {
+      margin-top: 8px;
+      padding: 8px;
+      background: #d4edda;
+      border-radius: 6px;
+      font-size: 12px;
+      color: #155724;
+      text-align: center;
+    }
+    .report-error {
+      margin-top: 4px;
+      font-size: 11px;
+      color: #e74c3c;
+    }
+
+    /* ── Add rappu / correction links ─────────────────── */
+    .popup-btn-add { background: #3498db; }
+    .popup-btn-add:hover { background: #2980b9; }
+    .popup-secondary-links {
+      margin-top: 6px;
+      font-size: 11px;
+    }
+    .popup-secondary-links a {
+      color: #aaa;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .popup-secondary-links a:hover { color: #666; text-decoration: underline; }
+    .mini-form {
+      margin-top: 6px;
+      padding: 8px;
+      background: #f9f9f9;
+      border-radius: 6px;
+      border: 1px solid #eee;
+    }
+    .mini-form label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      color: #555;
+      margin: 4px 0 2px;
+    }
+    .mini-form label:first-child { margin-top: 0; }
+    .mini-form input[type="text"],
+    .mini-form textarea {
+      width: 100%;
+      padding: 5px 8px;
+      border: 1.5px solid #ddd;
+      border-radius: 6px;
+      font-size: 12px;
+      font-family: inherit;
+      outline: none;
+    }
+    .mini-form input:focus,
+    .mini-form textarea:focus { border-color: #3498db; }
+    .mini-form textarea { resize: vertical; min-height: 40px; }
+    .mini-form .submit-btn {
+      margin-top: 6px;
+      width: 100%;
+      padding: 6px;
+      background: #3498db;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .mini-form .submit-btn:hover { background: #2980b9; }
+    .mini-form .submit-btn:disabled { background: #999; cursor: not-allowed; }
+
+    /* ── Admin badge ──────────────────────────────────── */
+    #admin-badge {
+      display: none;
+      margin: 6px 12px;
+      padding: 6px 10px;
+      background: #fef3c7;
+      border: 1px solid #f59e0b;
+      border-radius: 8px;
+      font-size: 11px;
+      color: #92400e;
+      cursor: pointer;
+      text-align: center;
+      flex-shrink: 0;
+    }
+    #admin-badge:hover { background: #fde68a; }
+
+    /* ── Admin panel ─────────────────────────────────── */
+    #admin-panel {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 9998;
+      background: #f8f9fa;
+      overflow-y: auto;
+    }
+    #admin-panel.visible { display: block; }
+    .admin-header {
+      background: #2c3e50;
+      color: #fff;
+      padding: 14px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .admin-header h2 { font-size: 16px; font-weight: 700; }
+    .admin-close {
+      background: rgba(255,255,255,.2);
+      border: none;
+      color: #fff;
+      border-radius: 6px;
+      padding: 5px 12px;
+      cursor: pointer;
+      font-size: 13px;
+      font-family: inherit;
+    }
+    .admin-close:hover { background: rgba(255,255,255,.35); }
+    .admin-section {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    .admin-section h3 {
+      font-size: 15px;
+      color: #2c3e50;
+      margin-bottom: 10px;
+      padding-bottom: 6px;
+      border-bottom: 2px solid #e5e7eb;
+    }
+    .admin-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      margin-bottom: 24px;
+      background: #fff;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 1px 3px rgba(0,0,0,.08);
+    }
+    .admin-table th {
+      background: #f1f5f9;
+      padding: 8px 10px;
+      text-align: left;
+      font-weight: 600;
+      color: #475569;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .03em;
+    }
+    .admin-table td {
+      padding: 8px 10px;
+      border-top: 1px solid #f0f0f0;
+      vertical-align: top;
+      color: #374151;
+    }
+    .admin-table tbody tr:hover { background: #f9fafb; }
+    .admin-btn {
+      border: none;
+      border-radius: 5px;
+      padding: 4px 10px;
+      font-size: 11px;
+      cursor: pointer;
+      font-family: inherit;
+      font-weight: 600;
+      color: #fff;
+    }
+    .admin-btn-approve { background: #22c55e; }
+    .admin-btn-approve:hover { background: #16a34a; }
+    .admin-btn-reject { background: #ef4444; }
+    .admin-btn-reject:hover { background: #dc2626; }
+    .admin-btn-fix { background: #3b82f6; }
+    .admin-btn-fix:hover { background: #2563eb; }
+    .admin-btn-dismiss { background: #9ca3af; }
+    .admin-btn-dismiss:hover { background: #6b7280; }
+    .admin-empty {
+      padding: 16px;
+      text-align: center;
+      color: #9ca3af;
+      font-size: 13px;
+      background: #fff;
+      border-radius: 8px;
+      margin-bottom: 24px;
+    }
+
+    /* ── Secrets in popup (admin only) ───────────────── */
+    .popup-secrets {
+      margin-top: 8px;
+      padding: 8px;
+      background: #fefce8;
+      border: 1px solid #fde68a;
+      border-radius: 6px;
+      font-size: 11px;
+    }
+    .popup-secrets-title {
+      font-weight: 700;
+      font-size: 12px;
+      color: #92400e;
+      margin-bottom: 4px;
+    }
+    .popup-secrets table { width: 100%; border-collapse: collapse; }
+    .popup-secrets td { padding: 2px 4px; vertical-align: top; }
+    .popup-secrets .secret-type { color: #a16207; font-weight: 500; white-space: nowrap; }
+    .popup-secrets .secret-value { color: #374151; }
+
+    /* ── Auth UI ──────────────────────────────────────── */
+    #auth-area {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+      margin-left: 6px;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    #auth-area a, #auth-area button {
+      background: none;
+      border: none;
+      color: rgba(255,255,255,.7);
+      cursor: pointer;
+      font-size: 12px;
+      font-family: inherit;
+      padding: 0;
+      text-decoration: none;
+    }
+    #auth-area a:hover, #auth-area button:hover {
+      color: #fff;
+      text-decoration: underline;
+    }
+    #auth-user-email {
+      color: rgba(255,255,255,.85);
+      font-size: 11px;
+      max-width: 140px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* ── Login overlay ───────────────────────────────── */
+    #login-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.45);
+      z-index: 10000;
+      align-items: center;
+      justify-content: center;
+    }
+    #login-overlay.visible { display: flex; }
+    #login-box {
+      background: #fff;
+      border-radius: 12px;
+      padding: 28px 24px;
+      width: 340px;
+      max-width: 92vw;
+      box-shadow: 0 8px 32px rgba(0,0,0,.18);
+      text-align: center;
+    }
+    #login-box h3 {
+      font-size: 16px;
+      margin-bottom: 6px;
+      color: #2c3e50;
+    }
+    #login-box p {
+      font-size: 13px;
+      color: #666;
+      margin-bottom: 14px;
+      line-height: 1.4;
+    }
+    #login-email {
+      width: 100%;
+      padding: 9px 12px;
+      border: 1.5px solid #ddd;
+      border-radius: 8px;
+      font-size: 14px;
+      font-family: inherit;
+      outline: none;
+    }
+    #login-email:focus { border-color: #2c3e50; }
+    #login-submit {
+      margin-top: 10px;
+      width: 100%;
+      padding: 9px;
+      background: #2c3e50;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    #login-submit:hover { background: #34495e; }
+    #login-submit:disabled { background: #999; cursor: not-allowed; }
+    #login-msg {
+      margin-top: 10px;
+      font-size: 12px;
+      min-height: 18px;
+    }
+    #login-close {
+      margin-top: 10px;
+      background: none;
+      border: none;
+      color: #aaa;
+      font-size: 12px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    #login-close:hover { color: #666; }
+
+    /* ── Responsive ────────────────────────────────────── */
+    @media (max-width: 600px) {
+      #main { flex-direction: column; position: relative; }
+      #map  { height: 100%; flex: 1; }
+      #sidebar {
+        position: absolute;
+        bottom: 0; left: 0; right: 0;
+        width: 100%;
+        height: 50vh;
+        border-left: none;
+        border-top: 1px solid #ddd;
+        transform: translateY(100%);
+        transition: transform .25s ease;
+        z-index: 800;
+      }
+      #sidebar.mobile-open {
+        transform: translateY(0);
+      }
+      #sidebar-toggle { display: block; }
+      #stats-title { display: none; }
+      #auth-user-email { max-width: 80px; font-size: 10px; }
+      .leaflet-popup-content { max-width: 260px !important; }
+      .popup-btn { padding: 6px 12px; font-size: 12px; }
+      .report-form input, .report-form select, .report-form textarea,
+      .mini-form input, .mini-form textarea {
+        padding: 8px 10px;
+        font-size: 14px;
+      }
+      .report-form .submit-btn, .mini-form .submit-btn {
+        padding: 10px;
+        font-size: 14px;
+      }
+    }
+  </style>
+</head>
+<body>
+
+<div id="loading-overlay">
+  <div class="spinner"></div>
+  <div id="loading-text">Ladataan tietoja...</div>
+</div>
+
+<div id="stats-bar">
+  <span id="stats-title">Talokartta</span>
+  <div id="stats-counts"></div>
+  <div id="stats-buttons">
+    <button id="btn-center" title="Keskita kartta">&#x1f3e0;</button>
+    <button id="btn-refresh" title="Paivita tiedot">&#x1f504;</button>
+  </div>
+  <div id="auth-area">
+    <a href="#" id="auth-login-link" onclick="showLoginOverlay(); return false;">&#x1f511; Kirjaudu</a>
+    <span id="auth-user-email" style="display:none"></span>
+    <button id="auth-logout-btn" style="display:none" onclick="handleLogout()">Kirjaudu ulos</button>
+  </div>
+</div>
+
+<!-- Login overlay -->
+<div id="login-overlay">
+  <div id="login-box">
+    <h3>Kirjaudu sisaan</h3>
+    <p>Syota sahkopostisi ja salasanasi, tai kaynnista kirjautumislinkki.</p>
+    <input type="email" id="login-email" placeholder="nimi@esimerkki.fi" autocomplete="email">
+    <input type="password" id="login-password" placeholder="Salasana (valinnainen)" autocomplete="current-password" style="margin-top:6px">
+    <div style="display:flex;gap:6px;margin-top:8px">
+      <button id="login-submit-pw" onclick="handlePasswordLogin()" style="flex:1">Kirjaudu</button>
+      <button id="login-submit" onclick="handleLogin()" style="flex:1">Laheta linkki</button>
+    </div>
+    <div id="login-msg"></div>
+    <button id="login-close" onclick="hideLoginOverlay()">Peruuta</button>
+  </div>
+</div>
+
+<div id="main">
+  <div id="pick-banner">
+    <span id="pick-banner-text"></span>
+    <button class="pick-btn pick-btn-confirm" id="pick-confirm" disabled onclick="confirmPick()">Vahvista</button>
+    <button class="pick-btn pick-btn-cancel" onclick="cancelPick()">Peruuta</button>
+  </div>
+  <div id="map"></div>
+  <div id="sidebar">
+    <div id="error-banner"></div>
+    <div id="admin-badge" onclick="showAdminPanel()"></div>
+    <div id="progress-section">
+      <div id="progress-label">0% valmis</div>
+      <div id="progress-bar-bg"><div id="progress-bar-fill" style="width:0%"></div></div>
+    </div>
+    <div id="sidebar-header">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <h2 style="margin:0">Rakennusluettelo</h2>
+        <button id="btn-add-building" style="background:#3498db;color:#fff;border:none;border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer">+ Rakennus</button>
+      </div>
+      <input type="text" id="search-input" placeholder="Hae kadun nimella...">
+    </div>
+    <div id="filter-chips"></div>
+    <div id="building-list"></div>
+  </div>
+</div>
+
+<button id="sidebar-toggle" aria-label="Nayta rakennuslista">&#x1f4cb;</button>
+
+<!-- Admin panel (rendered only for admins) -->
+<div id="admin-panel">
+  <div class="admin-header">
+    <h2>Hallintapaneeli</h2>
+    <button class="admin-close" onclick="hideAdminPanel()">Sulje</button>
+  </div>
+  <div class="admin-section">
+    <h3>Rakennusehdotukset</h3>
+    <div id="admin-suggestions"></div>
+
+    <h3>Sijaintikorjaukset</h3>
+    <div id="admin-corrections"></div>
+  </div>
+</div>
+
+<script>
+window.onerror = function(msg, src, line, col, err) {
+  document.getElementById('error-banner').style.display = 'block';
+  document.getElementById('error-banner').textContent = msg;
+};
+window.addEventListener('unhandledrejection', function(e) {
+  document.getElementById('error-banner').style.display = 'block';
+  document.getElementById('error-banner').textContent = 'Virhe: ' + (e.reason?.message || e.reason);
+});
+// ================================================================
+// 1. CONFIGURATION
+// ================================================================
+const SUPABASE_URL  = 'https://fwejgtviwukdcdvmdxgo.supabase.co';
+const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ3ZWpndHZpd3VrZGNkdm1keGdvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM1ODc0OTQsImV4cCI6MjA4OTE2MzQ5NH0.QimTz3WepIZT7r2b8w7Rn77jFVvjIImmIRETc85qBg0';
+
+const CENTER = [60.26345, 24.79881];
+const ZOOM   = 16;
+
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+
+// ================================================================
+// 2. STATUS CONFIG
+// ================================================================
+const STATUS_LABELS = {
+  unvisited:   'Kaymatta',
+  in_progress: 'Kaynnissa',
+  done:        'Valmis',
+  no_access:   'Ei paasya',
+};
+
+const STATUS_COLOR = {
+  unvisited:   '#9CA3AF',
+  in_progress: '#F97316',
+  done:        '#22C55E',
+  no_access:   '#7C3AED',
+};
+
+const FILTER_ORDER = ['Kaikki', 'unvisited', 'in_progress', 'done', 'no_access'];
+
+// ================================================================
+// 3. MAP INIT
+// ================================================================
+const map = L.map('map', { zoomControl: true }).setView(CENTER, ZOOM);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>',
+  maxZoom: 19,
+}).addTo(map);
+
+const buildingLayerGroup = L.featureGroup().addTo(map);
+const rappuLayerGroup    = L.featureGroup().addTo(map);
+
+// ================================================================
+// 4. STATE
+// ================================================================
+let allBuildings  = [];   // from building_status view
+let allRappus     = [];   // from rappus table
+let allVisits     = [];   // from visits table
+let currentFilter = 'Kaikki';
+let searchQuery   = '';
+
+// Auth state
+let currentUser = null;   // Supabase user object (or null)
+let isAdmin     = false;  // profiles.is_admin
+
+// Admin state
+let pendingSuggestions = [];
+let pendingCorrections = [];
+let buildingSecrets   = new Map(); // building_id -> array of secrets
+
+// Pick mode state
+let pickMode   = null;   // { type, message, onConfirm, onCancel, savedData }
+let pickMarker = null;   // temporary L.marker during pick
+let correctionPickCoords = null; // { lat, lng } stored between pick and form submit
+
+// Layer lookups
+const buildingLayers = new Map(); // building.id -> L.circleMarker
+const rappuLayers    = [];        // array of L.circleMarker (with options.buildingId, options.rappuId, etc.)
+
+// ================================================================
+// 4b. AUTH — Magic link login
+// ================================================================
+
+function showLoginOverlay() {
+  document.getElementById('login-overlay').classList.add('visible');
+  document.getElementById('login-email').value = '';
+  document.getElementById('login-msg').innerHTML = '';
+  document.getElementById('login-submit').disabled = false;
+  document.getElementById('login-submit').textContent = 'Laheta linkki';
+  setTimeout(() => document.getElementById('login-email').focus(), 100);
+}
+
+function hideLoginOverlay() {
+  document.getElementById('login-overlay').classList.remove('visible');
+}
+
+async function handlePasswordLogin() {
+  const email = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-password').value;
+  const msgEl = document.getElementById('login-msg');
+
+  if (!email || !email.includes('@')) {
+    msgEl.innerHTML = '<span style="color:#e74c3c">Syota kelvollinen sahkopostiosoite</span>';
+    return;
+  }
+  if (!password) {
+    msgEl.innerHTML = '<span style="color:#e74c3c">Syota salasana</span>';
+    return;
+  }
+
+  const btn = document.getElementById('login-submit-pw');
+  btn.disabled = true;
+  btn.textContent = 'Kirjaudutaan...';
+  msgEl.innerHTML = '';
+
+  try {
+    const { error } = await sb.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    hideLoginOverlay();
+  } catch (err) {
+    msgEl.innerHTML = '<span style="color:#e74c3c">Virhe: ' + esc(err.message) + '</span>';
+    btn.disabled = false;
+    btn.textContent = 'Kirjaudu';
+  }
+}
+
+async function handleLogin() {
+  const email = document.getElementById('login-email').value.trim();
+  const msgEl = document.getElementById('login-msg');
+  const btn   = document.getElementById('login-submit');
+
+  if (!email || !email.includes('@')) {
+    msgEl.innerHTML = '<span style="color:#e74c3c">Syota kelvollinen sahkopostiosoite</span>';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Lahetetaan...';
+  msgEl.innerHTML = '';
+
+  try {
+    const { error } = await sb.auth.signInWithOtp({
+      email: email,
+      options: {
+        emailRedirectTo: window.location.origin + window.location.pathname,
+      },
+    });
+
+    if (error) throw error;
+
+    msgEl.innerHTML = '<span style="color:#27ae60">Tarkista sahkopostisi! Kirjautumislinkki on lahetetty.</span>';
+    btn.textContent = 'Linkki lahetetty';
+
+  } catch (err) {
+    msgEl.innerHTML = '<span style="color:#e74c3c">Virhe: ' + esc(err.message) + '</span>';
+    btn.disabled = false;
+    btn.textContent = 'Laheta linkki';
+  }
+}
+
+async function handleLogout() {
+  await sb.auth.signOut();
+  currentUser = null;
+  isAdmin = false;
+  updateUIForAuthState();
+}
+
+async function loadProfile(userId) {
+  try {
+    const { data, error } = await sb.from('profiles')
+      .select('full_name, display_name, is_admin')
+      .eq('id', userId)
+      .single();
+
+    if (error) {
+      console.warn('[Auth] Could not load profile:', error.message);
+      // Try minimal query as fallback (in case columns don't exist)
+      const { data: d2 } = await sb.from('profiles')
+        .select('is_admin')
+        .eq('id', userId)
+        .single();
+      if (d2) isAdmin = d2.is_admin === true;
+      return;
+    }
+
+    isAdmin = data?.is_admin === true;
+
+    // Use display_name or full_name if set, otherwise keep email
+    const displayName = data?.display_name || data?.full_name;
+    if (displayName) {
+      document.getElementById('auth-user-email').textContent = displayName;
+    }
+
+  } catch (err) {
+    console.warn('[Auth] Profile load error:', err);
+  }
+}
+
+function updateUIForAuthState() {
+  const loginLink = document.getElementById('auth-login-link');
+  const emailSpan = document.getElementById('auth-user-email');
+  const logoutBtn = document.getElementById('auth-logout-btn');
+
+  if (currentUser) {
+    loginLink.style.display = 'none';
+    emailSpan.style.display = 'inline';
+    emailSpan.textContent = currentUser.email || 'Kirjautunut';
+    logoutBtn.style.display = 'inline';
+  } else {
+    loginLink.style.display = 'inline';
+    emailSpan.style.display = 'none';
+    logoutBtn.style.display = 'none';
+  }
+}
+
+// Listen for auth state changes (magic link callback, session restore)
+sb.auth.onAuthStateChange(async (event, session) => {
+  console.log('[Auth]', event, session?.user?.email);
+
+  currentUser = session?.user ?? null;
+  isAdmin = false;
+
+  if (currentUser) {
+    await loadProfile(currentUser.id);
+    // Close login overlay if open
+    hideLoginOverlay();
+    // Load admin data if admin
+    if (isAdmin) await loadAdminData();
+  }
+
+  updateUIForAuthState();
+});
+
+// Enter key submits login form
+document.getElementById('login-email').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') handleLogin();
+});
+
+// Click outside login box to close
+document.getElementById('login-overlay').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) hideLoginOverlay();
+});
+
+// ================================================================
+// 5. UTILITIES
+// ================================================================
+function esc(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function fmtDate(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  if (isNaN(d)) return '';
+  return d.toLocaleDateString('fi-FI', { day: 'numeric', month: 'numeric', year: 'numeric' });
+}
+
+function filterLabel(status) {
+  if (status === 'Kaikki') return 'Kaikki';
+  return STATUS_LABELS[status] || status;
+}
+
+// ================================================================
+// 6. DATA LOADING
+// ================================================================
+async function loadData() {
+  const overlay     = document.getElementById('loading-overlay');
+  const loadingText = document.getElementById('loading-text');
+  const errorBanner = document.getElementById('error-banner');
+
+  overlay.classList.remove('hidden');
+  errorBanner.style.display = 'none';
+
+  try {
+    loadingText.textContent = 'Ladataan rakennuksia...';
+
+    // Fetch all data in parallel with 10s timeout
+    const dataTimeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Yhteys aikakatkaistiin. Yrita uudelleen.')), 10000));
+    const dataFetch = Promise.all([
+      sb.from('building_status').select('*'),
+      sb.from('rappus').select('*'),
+      sb.from('visits').select('*').order('visited_at', { ascending: false }),
+    ]);
+
+    const [buildingsRes, rappusRes, visitsRes] = await Promise.race([dataFetch, dataTimeout]);
+
+    if (buildingsRes.error) throw new Error('Buildings: ' + buildingsRes.error.message);
+    if (rappusRes.error)    throw new Error('Rappus: ' + rappusRes.error.message);
+    if (visitsRes.error)    throw new Error('Visits: ' + visitsRes.error.message);
+
+    allBuildings = buildingsRes.data;
+    allRappus    = rappusRes.data;
+    allVisits    = visitsRes.data;
+
+    // Sort buildings: street asc, number numeric asc
+    allBuildings.sort((a, b) => {
+      const s = a.street.localeCompare(b.street, 'fi');
+      return s !== 0 ? s : parseInt(a.number) - parseInt(b.number);
+    });
+
+    renderAll();
+
+  } catch (err) {
+    errorBanner.style.display = 'block';
+    errorBanner.innerHTML = esc(err.message) + ' <a href="javascript:location.reload()" style="color:white;text-decoration:underline;margin-left:8px">Lataa uudelleen</a>';
+    console.error('[Talokartta]', err);
+  } finally {
+    overlay.classList.add('hidden');
+  }
+}
+
+// ================================================================
+// 7. RENDER — ALL
+// ================================================================
+function renderAll() {
+  renderMarkers();
+  renderStats();
+  renderFilters();
+  renderList();
+}
+
+// ================================================================
+// 8. RENDER — MAP MARKERS
+// ================================================================
+
+function defaultBuildingStyle(status) {
+  return {
+    radius:      14,
+    weight:      2,
+    color:       '#fff',
+    fillColor:   STATUS_COLOR[status] || '#9CA3AF',
+    fillOpacity: 0.35,
+  };
+}
+
+function defaultRappuStyle(status) {
+  return {
+    radius:      8,
+    weight:      2,
+    color:       '#fff',
+    fillColor:   STATUS_COLOR[status] || '#9CA3AF',
+    fillOpacity: 0.95,
+  };
+}
+
+function renderMarkers() {
+  buildingLayerGroup.clearLayers();
+  rappuLayerGroup.clearLayers();
+  buildingLayers.clear();
+  rappuLayers.length = 0;
+
+  // Group rappus by building_id for quick lookup
+  const rappusByBuilding = new Map();
+  allRappus.forEach(r => {
+    if (!rappusByBuilding.has(r.building_id)) rappusByBuilding.set(r.building_id, []);
+    rappusByBuilding.get(r.building_id).push(r);
+  });
+
+  allBuildings.forEach(b => {
+    const lat = parseFloat(b.lat);
+    const lng = parseFloat(b.lng);
+    if (!isFinite(lat) || !isFinite(lng)) return;
+
+    const status = b.computed_status || 'unvisited';
+
+    // Filter check
+    if (currentFilter !== 'Kaikki' && status !== currentFilter) return;
+
+    const rappus = rappusByBuilding.get(b.id) || [];
+    const hasRappus = rappus.length > 0;
+
+    // Building circle (larger, semi-transparent)
+    const bCircle = L.circleMarker([lat, lng], {
+      ...defaultBuildingStyle(status),
+      buildingId: b.id,
+      status: status,
+    });
+
+    bCircle.bindPopup(() => buildBuildingPopup(b, rappus), { maxWidth: 300, minWidth: 230 });
+    bCircle.addTo(buildingLayerGroup);
+    buildingLayers.set(b.id, bCircle);
+
+    // Rappu circles (smaller, solid, offset from building center)
+    if (hasRappus) {
+      rappus.forEach(r => {
+        const rLat = lat + (r.lat_offset || 0);
+        const rLng = lng + (r.lng_offset || 0);
+        const rStatus = r.status || 'unvisited';
+
+        // If filtering, also filter rappus
+        if (currentFilter !== 'Kaikki' && status !== currentFilter) return;
+
+        const rCircle = L.circleMarker([rLat, rLng], {
+          ...defaultRappuStyle(rStatus),
+          buildingId: b.id,
+          rappuId:    r.id,
+          rappuLetter: r.letter,
+          status:     rStatus,
+        });
+
+        rCircle.bindPopup(() => buildRappuPopup(b, r), { maxWidth: 280, minWidth: 220 });
+
+        // Rappu click: highlight siblings
+        rCircle.on('click', function () {
+          highlightSiblings(b.id);
+        });
+
+        rCircle.addTo(rappuLayerGroup);
+        rappuLayers.push(rCircle);
+      });
+    }
+  });
+
+  // Clear highlights when any popup closes
+  map.off('popupclose', clearHighlights);
+  map.on('popupclose', clearHighlights);
+}
+
+// ================================================================
+// 9. RAPPU GROUPING HIGHLIGHT
+// ================================================================
+function highlightSiblings(buildingId) {
+  clearHighlights();
+
+  // Highlight all rappu circles of this building
+  rappuLayers.forEach(layer => {
+    if (layer.options.buildingId === buildingId) {
+      layer.setStyle({
+        weight: 3,
+        color: '#FBBF24',
+        fillOpacity: 0.9,
+      });
+    }
+  });
+
+  // Highlight the building circle
+  const bLayer = buildingLayers.get(buildingId);
+  if (bLayer) {
+    bLayer.setStyle({
+      weight: 3,
+      color: '#FBBF24',
+      fillOpacity: 0.45,
+    });
+  }
+}
+
+function clearHighlights() {
+  rappuLayers.forEach(layer => {
+    layer.setStyle(defaultRappuStyle(layer.options.status));
+  });
+  buildingLayers.forEach(layer => {
+    layer.setStyle(defaultBuildingStyle(layer.options.status));
+  });
+}
+
+// ================================================================
+// 10. POPUP — BUILDING
+// ================================================================
+function buildBuildingPopup(b, rappus) {
+  const status = b.computed_status || 'unvisited';
+  const color  = STATUS_COLOR[status] || '#9CA3AF';
+  const label  = STATUS_LABELS[status] || status;
+
+  // Rappu summary dots
+  let rappuSummary = '';
+  if (rappus.length > 0) {
+    const sorted = [...rappus].sort((a, b) => a.letter.localeCompare(b.letter));
+    rappuSummary = '<div class="popup-rappu-summary">' +
+      sorted.map(r => {
+        const rc = STATUS_COLOR[r.status] || '#9CA3AF';
+        return `<span class="popup-rappu-item"><span class="rdot" style="background:${rc}"></span>${esc(r.letter)}</span>`;
+      }).join('') +
+      '</div>';
+  }
+
+  // Visit history for this building (last 5)
+  const visits = allVisits.filter(v => v.building_id === b.id).slice(0, 5);
+  let historyHtml;
+  if (visits.length > 0) {
+    const rows = visits.map(v => {
+      const rappu = allRappus.find(r => r.id === v.rappu_id);
+      return `<tr>
+        <td>${esc(fmtDate(v.visited_at))}</td>
+        <td>${esc(v.visitor_name)}</td>
+        <td>${esc(rappu ? rappu.letter : (v.raw_rappu_text || ''))}</td>
+        <td>${esc(STATUS_LABELS[v.status] || v.status)}</td>
+      </tr>`;
+    }).join('');
+    historyHtml = `
+      <div class="popup-history">
+        <table>
+          <thead><tr><th>Pvm</th><th>Nimi</th><th>Rappu</th><th>Tila</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  } else {
+    historyHtml = '<div class="popup-no-visits">Ei kirjauksia</div>';
+  }
+
+  const gmapsUrl = 'https://www.google.com/maps/search/?api=1&query=' +
+    encodeURIComponent(`${b.street} ${b.number}, 01710 Vantaa, Finland`);
+
+  // Rappu dropdown options
+  const sorted = rappus.length > 0
+    ? [...rappus].sort((a, c) => a.letter.localeCompare(c.letter))
+    : [];
+  const rappuOptions = sorted.map(r =>
+    `<option value="${esc(r.id)}">${esc(r.letter)}</option>`
+  ).join('');
+
+  return `
+    <div class="popup-title">${esc(b.street)} ${esc(b.number)}</div>
+    <span class="popup-badge" style="background:${color}">${esc(label)}</span>
+    ${rappuSummary}
+    ${historyHtml}
+    <div class="popup-links">
+      <a class="gmaps" href="${gmapsUrl}" target="_blank" rel="noopener">Google Maps &#x2197;</a>
+      <button class="popup-btn popup-btn-report" onclick="toggleReportForm('form-${b.id}')">Taloraportti</button>
+      <button class="popup-btn popup-btn-add" onclick="toggleReportForm('addrappu-${b.id}')">+ Rappu</button>
+      <button class="popup-btn" style="background:#7C3AED;color:#fff" onclick="markBuildingNoAccess('${b.id}')">Ei paasya</button>
+    </div>
+    <div id="form-${b.id}" style="display:none">
+      <div class="report-form">
+        <label>Nimi (henkilö tai tiimi)</label>
+        <input type="text" id="name-${b.id}" placeholder="Nimi...">
+
+        <label>Rappu</label>
+        <select id="rappu-${b.id}">
+          <option value="">— Valitse rappu —</option>
+          ${rappuOptions}
+          <option value="__new">+ Uusi rappu...</option>
+        </select>
+        <input type="text" id="newrappu-${b.id}" placeholder="Kirjain, esim. D" maxlength="2" style="display:none;margin-top:4px">
+
+        <label>Tilanne</label>
+        <div class="radio-group">
+          <label><input type="radio" name="status-${b.id}" value="done"> Valmis — kaikki asunnot kayty</label>
+          <label><input type="radio" name="status-${b.id}" value="in_progress" checked> Kaynnissa — aloitettu</label>
+          <label><input type="radio" name="status-${b.id}" value="no_access"> Ei paasya — lukittu ovi</label>
+        </div>
+
+        <label>Ovien maara (valinnainen)</label>
+        <input type="number" id="doors-${b.id}" placeholder="esim. 12" min="0">
+
+        <label>Muuta / Notes</label>
+        <textarea id="notes-${b.id}" placeholder="Lisatietoja..."></textarea>
+
+        <label>Extra (valinnainen)</label>
+        <input type="text" id="extra-${b.id}" placeholder="">
+
+        <button class="submit-btn" onclick="submitVisit('${b.id}')">Laheta raportti</button>
+        <div id="msg-${b.id}"></div>
+      </div>
+    </div>
+    <div id="addrappu-${b.id}" style="display:none">
+      <div class="mini-form">
+        <label>Uusi rappu (kirjain)</label>
+        <input type="text" id="ar-letter-${b.id}" placeholder="esim. D" maxlength="2">
+        <label>Nimesi</label>
+        <input type="text" id="ar-name-${b.id}" placeholder="Nimi...">
+        <div style="display:flex;gap:4px;margin-top:6px">
+          <button class="submit-btn" style="flex:1" onclick="submitAddRappu('${b.id}')">Lisaa (automaattinen)</button>
+          <button class="submit-btn" style="flex:1;background:#2563eb" onclick="startRappuPick('${b.id}')">Aseta kartalla</button>
+        </div>
+        <div id="ar-msg-${b.id}"></div>
+      </div>
+    </div>
+    <div class="popup-secondary-links">
+      <a onclick="toggleReportForm('corr-${b.id}')">Ilmoita virheellinen sijainti</a>
+    </div>
+    <div id="corr-${b.id}" style="display:none">
+      <div class="mini-form">
+        <label>Nimesi</label>
+        <input type="text" id="corr-name-${b.id}" placeholder="Nimi...">
+        <label>Mika on pielessä?</label>
+        <textarea id="corr-desc-${b.id}" placeholder="Esim. Rakennus on väärässä paikassa, oikea sijainti on..."></textarea>
+        <div style="display:flex;gap:4px;margin-top:6px">
+          <button class="submit-btn" style="flex:1" onclick="submitCorrection('building','${b.id}',null,'corr-${b.id}')">Laheta ilmoitus</button>
+          <button class="submit-btn" style="flex:1;background:#2563eb" onclick="startCorrectionPick('building','${b.id}',null,'corr-${b.id}')">Nayta kartalla</button>
+        </div>
+        <div id="corr-msg-${b.id}"></div>
+      </div>
+    </div>
+    ${buildSecretsHtml(b.id)}`;
+}
+
+// ================================================================
+// 11. POPUP — RAPPU
+// ================================================================
+function buildRappuPopup(b, rappu) {
+  const status = rappu.status || 'unvisited';
+  const color  = STATUS_COLOR[status] || '#9CA3AF';
+  const label  = STATUS_LABELS[status] || status;
+
+  // Visit history for this specific rappu (last 5)
+  const visits = allVisits.filter(v => v.rappu_id === rappu.id).slice(0, 5);
+  let historyHtml;
+  if (visits.length > 0) {
+    const rows = visits.map(v =>
+      `<tr>
+        <td>${esc(fmtDate(v.visited_at))}</td>
+        <td>${esc(v.visitor_name)}</td>
+        <td>${esc(STATUS_LABELS[v.status] || v.status)}</td>
+      </tr>`
+    ).join('');
+    historyHtml = `
+      <div class="popup-history">
+        <table>
+          <thead><tr><th>Pvm</th><th>Nimi</th><th>Tila</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  } else {
+    historyHtml = '<div class="popup-no-visits">Ei kirjauksia talle rapulle</div>';
+  }
+
+  const formId = `rform-${rappu.id}`;
+
+  return `
+    <div class="popup-title">${esc(b.street)} ${esc(b.number)} &mdash; Rappu ${esc(rappu.letter)}</div>
+    <span class="popup-badge" style="background:${color}">${esc(label)}</span>
+    ${historyHtml}
+    <div class="popup-links">
+      <button class="popup-btn popup-btn-report" onclick="toggleReportForm('${formId}')">Taloraportti</button>
+    </div>
+    <div id="${formId}" style="display:none">
+      <div class="report-form">
+        <label>Nimi (henkilö tai tiimi)</label>
+        <input type="text" id="name-${formId}" placeholder="Nimi...">
+
+        <label>Tilanne</label>
+        <div class="radio-group">
+          <label><input type="radio" name="status-${formId}" value="done"> Valmis — kaikki asunnot kayty</label>
+          <label><input type="radio" name="status-${formId}" value="in_progress" checked> Kaynnissa — aloitettu</label>
+          <label><input type="radio" name="status-${formId}" value="no_access"> Ei paasya — lukittu ovi</label>
+        </div>
+
+        <label>Ovien maara (valinnainen)</label>
+        <input type="number" id="doors-${formId}" placeholder="esim. 12" min="0">
+
+        <label>Muuta / Notes</label>
+        <textarea id="notes-${formId}" placeholder="Lisatietoja..."></textarea>
+
+        <label>Extra (valinnainen)</label>
+        <input type="text" id="extra-${formId}" placeholder="">
+
+        <button class="submit-btn" onclick="submitRappuVisit('${b.id}','${rappu.id}','${formId}')">Laheta raportti</button>
+        <div id="msg-${formId}"></div>
+      </div>
+    </div>
+    ${buildRappuSecretsHtml(b.id, rappu.id, rappu.letter)}
+    <div class="popup-secondary-links">
+      <a onclick="toggleReportForm('rcorr-${rappu.id}')">Ilmoita virheellinen sijainti</a>
+    </div>
+    <div id="rcorr-${rappu.id}" style="display:none">
+      <div class="mini-form">
+        <label>Nimesi</label>
+        <input type="text" id="rcorr-name-${rappu.id}" placeholder="Nimi...">
+        <label>Mika on pielessä?</label>
+        <textarea id="rcorr-desc-${rappu.id}" placeholder="Esim. Tama rappu on väärässä paikassa..."></textarea>
+        <div style="display:flex;gap:4px;margin-top:6px">
+          <button class="submit-btn" style="flex:1" onclick="submitCorrection('rappu','${b.id}','${rappu.id}','rcorr-${rappu.id}')">Laheta ilmoitus</button>
+          <button class="submit-btn" style="flex:1;background:#2563eb" onclick="startCorrectionPick('rappu','${b.id}','${rappu.id}','rcorr-${rappu.id}')">Nayta kartalla</button>
+        </div>
+        <div id="rcorr-msg-${rappu.id}"></div>
+      </div>
+    </div>`;
+}
+
+// ================================================================
+// 12. RENDER — STATS BAR
+// ================================================================
+function renderStats() {
+  const counts = { unvisited: 0, in_progress: 0, done: 0, no_access: 0 };
+  allBuildings.forEach(b => {
+    const s = b.computed_status || 'unvisited';
+    if (s in counts) counts[s]++;
+  });
+
+  const total = allBuildings.length;
+  const done  = counts.done;
+  const pct   = total > 0 ? Math.round((done / total) * 100) : 0;
+
+  document.getElementById('stats-counts').innerHTML = `
+    <span class="stat-chip">
+      <span class="stat-dot" style="background:${STATUS_COLOR.done}"></span>Valmis: ${counts.done}
+    </span>
+    <span class="stat-chip">
+      <span class="stat-dot" style="background:${STATUS_COLOR.in_progress}"></span>Kaynnissa: ${counts.in_progress}
+    </span>
+    <span class="stat-chip">
+      <span class="stat-dot" style="background:${STATUS_COLOR.no_access}"></span>Ei paasya: ${counts.no_access}
+    </span>
+    <span class="stat-chip">
+      <span class="stat-dot" style="background:${STATUS_COLOR.unvisited}"></span>Kaymatta: ${counts.unvisited}
+    </span>
+    <span class="stat-chip" style="font-weight:600">${pct}% valmis (${total} rakennusta)</span>`;
+
+  // Update sidebar progress bar
+  document.getElementById('progress-label').textContent =
+    `${pct}% valmis — ${done}/${total} rakennusta`;
+  document.getElementById('progress-bar-fill').style.width = pct + '%';
+}
+
+// ================================================================
+// 13. RENDER — FILTER CHIPS
+// ================================================================
+function renderFilters() {
+  // Compute counts
+  const counts = { Kaikki: allBuildings.length, unvisited: 0, in_progress: 0, done: 0, no_access: 0 };
+  allBuildings.forEach(b => {
+    const s = b.computed_status || 'unvisited';
+    if (s in counts) counts[s]++;
+  });
+
+  const container = document.getElementById('filter-chips');
+  container.innerHTML = FILTER_ORDER.map(s => {
+    const color  = s === 'Kaikki' ? '#2c3e50' : (STATUS_COLOR[s] || '#9CA3AF');
+    const active = currentFilter === s;
+    const dot    = s !== 'Kaikki'
+      ? `<span class="chip-dot" style="background:${color}"></span>`
+      : '';
+    const badge = counts[s] > 0 ? ` (${counts[s]})` : '';
+    return `<button class="filter-chip${active ? ' active' : ''}" data-status="${esc(s)}">
+      ${dot}${esc(filterLabel(s))}${badge}
+    </button>`;
+  }).join('');
+
+  container.querySelectorAll('.filter-chip').forEach(btn => {
+    btn.addEventListener('click', () => {
+      currentFilter = btn.dataset.status;
+      renderAll();
+    });
+  });
+}
+
+// ================================================================
+// 14. RENDER — SIDEBAR LIST
+// ================================================================
+function renderList() {
+  const list = document.getElementById('building-list');
+
+  // Group rappus by building for mini-dots
+  const rappusByBuilding = new Map();
+  allRappus.forEach(r => {
+    if (!rappusByBuilding.has(r.building_id)) rappusByBuilding.set(r.building_id, []);
+    rappusByBuilding.get(r.building_id).push(r);
+  });
+
+  const visible = allBuildings.filter(b => {
+    const status = b.computed_status || 'unvisited';
+    if (currentFilter !== 'Kaikki' && status !== currentFilter) return false;
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      const addr = `${b.street} ${b.number}`.toLowerCase();
+      if (!addr.includes(q)) return false;
+    }
+    return true;
+  });
+
+  list.innerHTML = visible.map(b => {
+    const status = b.computed_status || 'unvisited';
+    const color  = STATUS_COLOR[status] || '#9CA3AF';
+    const rappus = rappusByBuilding.get(b.id) || [];
+
+    // Mini rappu dots
+    let miniDots = '';
+    if (rappus.length > 0) {
+      const sorted = [...rappus].sort((a, c) => a.letter.localeCompare(c.letter));
+      miniDots = '<span class="building-rappu-dots">' +
+        sorted.map(r => `<span class="rappu-mini-dot" style="background:${STATUS_COLOR[r.status] || '#9CA3AF'}" title="Rappu ${esc(r.letter)}"></span>`).join('') +
+        '</span>';
+    }
+
+    return `<div class="building-item" data-id="${esc(b.id)}">
+      <span class="status-dot" style="background:${color}"></span>
+      <span class="building-addr">${esc(b.street)} ${esc(b.number)}</span>
+      ${miniDots}
+    </div>`;
+  }).join('');
+
+  list.querySelectorAll('.building-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const bId = el.dataset.id;
+      const layer = buildingLayers.get(bId);
+      if (layer) {
+        map.setView(layer.getLatLng(), 17);
+        layer.openPopup();
+      }
+    });
+  });
+}
+
+// ================================================================
+// 14b. MAP PICK MODE
+// ================================================================
+
+function enterPickMode(options) {
+  // options: { type, message, onConfirm, onCancel, savedData }
+  map.closePopup();
+  pickMode = options;
+
+  // Show banner
+  document.getElementById('pick-banner-text').textContent = options.message;
+  document.getElementById('pick-banner').classList.add('visible');
+  document.getElementById('pick-confirm').disabled = true;
+  document.getElementById('map').classList.add('pick-active');
+
+  // Listen for map clicks
+  map.on('click', onMapPickClick);
+
+  // Escape key to cancel
+  document._pickEscHandler = function(e) { if (e.key === 'Escape') cancelPick(); };
+  document.addEventListener('keydown', document._pickEscHandler);
+}
+
+function onMapPickClick(e) {
+  // Remove previous pick marker
+  if (pickMarker) { map.removeLayer(pickMarker); }
+
+  pickMarker = L.marker([e.latlng.lat, e.latlng.lng], { draggable: true }).addTo(map);
+
+  // Enable confirm button
+  document.getElementById('pick-confirm').disabled = false;
+
+  // Bind a tooltip showing coordinates
+  pickMarker.bindTooltip(
+    `${e.latlng.lat.toFixed(5)}, ${e.latlng.lng.toFixed(5)}`,
+    { permanent: true, direction: 'top', offset: [0, -10] }
+  );
+
+  // Update tooltip on drag
+  pickMarker.on('dragend', function() {
+    const pos = pickMarker.getLatLng();
+    pickMarker.setTooltipContent(`${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)}`);
+  });
+}
+
+function confirmPick() {
+  if (!pickMode || !pickMarker) return;
+  const pos = pickMarker.getLatLng();
+  const callback = pickMode.onConfirm;
+  exitPickMode();
+  if (callback) callback({ lat: pos.lat, lng: pos.lng });
+}
+
+function cancelPick() {
+  const callback = pickMode?.onCancel;
+  exitPickMode();
+  if (callback) callback();
+}
+
+function exitPickMode() {
+  if (pickMarker) { map.removeLayer(pickMarker); pickMarker = null; }
+  document.getElementById('pick-banner').classList.remove('visible');
+  document.getElementById('map').classList.remove('pick-active');
+  map.off('click', onMapPickClick);
+  if (document._pickEscHandler) {
+    document.removeEventListener('keydown', document._pickEscHandler);
+    document._pickEscHandler = null;
+  }
+  pickMode = null;
+}
+
+// ── Pick mode: Add Rappu at specific location ──────────
+function startRappuPick(buildingId) {
+  // Capture form values before popup closes
+  const letter = document.getElementById('ar-letter-' + buildingId)?.value.trim().toUpperCase();
+  const name   = document.getElementById('ar-name-' + buildingId)?.value.trim();
+  const msgEl  = document.getElementById('ar-msg-' + buildingId);
+
+  if (!letter || !/^[A-Z]$/.test(letter)) {
+    if (msgEl) msgEl.innerHTML = '<div class="report-error">Anna yksi kirjain (A-Z)</div>';
+    return;
+  }
+  if (!name) {
+    if (msgEl) msgEl.innerHTML = '<div class="report-error">Nimi on pakollinen</div>';
+    return;
+  }
+
+  // Check if rappu already exists
+  const existing = allRappus.find(r => r.building_id === buildingId && r.letter === letter);
+  if (existing) {
+    if (msgEl) msgEl.innerHTML = '<div class="report-error">Rappu ' + esc(letter) + ' on jo olemassa</div>';
+    return;
+  }
+
+  enterPickMode({
+    type: 'rappu',
+    message: 'Klikkaa karttaa asettaaksesi rappu ' + letter + ' sijainti. Voit siirtaa merkkia.',
+    savedData: { buildingId, letter, name },
+    onConfirm: async function(pos) {
+      const building = allBuildings.find(b => b.id === buildingId);
+      if (!building) { alert('Rakennusta ei loydy'); return; }
+
+      const latOffset = pos.lat - parseFloat(building.lat);
+      const lngOffset = pos.lng - parseFloat(building.lng);
+
+      try {
+        await createNewRappu(buildingId, letter, name, latOffset, lngOffset);
+        loadData();
+      } catch (err) {
+        alert('Virhe: ' + err.message);
+      }
+    },
+  });
+}
+
+// ── Pick mode: Location correction ──────────────────────
+function startCorrectionPick(targetType, buildingId, rappuId, formPrefix) {
+  // Capture form values before popup closes
+  const nameEl = document.getElementById(formPrefix + '-name-' + (rappuId || buildingId))
+              || document.getElementById('corr-name-' + buildingId);
+  const descEl = document.getElementById(formPrefix + '-desc-' + (rappuId || buildingId))
+              || document.getElementById('corr-desc-' + buildingId);
+
+  const savedName = nameEl?.value.trim() || '';
+  const savedDesc = descEl?.value.trim() || '';
+
+  enterPickMode({
+    type: 'correction',
+    message: 'Klikkaa karttaa nayttaaksesi oikea sijainti. Voit siirtaa merkkia.',
+    savedData: { targetType, buildingId, rappuId, formPrefix, savedName, savedDesc },
+    onConfirm: function(pos) {
+      // Store the picked coordinates
+      correctionPickCoords = pos;
+
+      // Re-open the building/rappu popup to let user submit
+      const layer = buildingLayers.get(buildingId);
+      if (layer) {
+        layer.openPopup();
+        // After popup opens, populate the form fields
+        setTimeout(() => {
+          const form = document.getElementById(formPrefix.startsWith('rcorr') ? formPrefix : 'corr-' + buildingId);
+          if (form) form.style.display = 'block';
+
+          const nEl = document.getElementById(formPrefix + '-name-' + (rappuId || buildingId))
+                   || document.getElementById('corr-name-' + buildingId);
+          const dEl = document.getElementById(formPrefix + '-desc-' + (rappuId || buildingId))
+                   || document.getElementById('corr-desc-' + buildingId);
+
+          if (nEl) nEl.value = savedName;
+          if (dEl) {
+            const coordText = 'Ehdotettu oikea sijainti: ' + pos.lat.toFixed(6) + ', ' + pos.lng.toFixed(6);
+            dEl.value = savedDesc ? savedDesc + '\n' + coordText : coordText;
+          }
+        }, 200);
+      }
+    },
+  });
+}
+
+// ── Pick mode: Building suggestion from sidebar button ──
+function startBuildingSuggestPick() {
+  enterPickMode({
+    type: 'building',
+    message: 'Klikkaa karttaa valitaksesi rakennuksen sijainti. Voit siirtaa merkkia.',
+    onConfirm: function(pos) {
+      openSuggestBuildingPopup(pos.lat, pos.lng);
+    },
+  });
+}
+
+// ================================================================
+// 15. FORM HANDLERS — Taloraportti
+// ================================================================
+
+function toggleReportForm(formId) {
+  const el = document.getElementById(formId);
+  if (!el) return;
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+
+  // Handle "new rappu" dropdown toggle
+  const select = el.querySelector('select');
+  const newInput = el.querySelector('input[id^="newrappu-"]');
+  if (select && newInput) {
+    select.addEventListener('change', () => {
+      newInput.style.display = select.value === '__new' ? 'block' : 'none';
+    });
+  }
+}
+
+// Submit visit from BUILDING popup (has rappu dropdown)
+async function submitVisit(buildingId) {
+  const name   = document.getElementById('name-' + buildingId)?.value.trim();
+  const rappuSel = document.getElementById('rappu-' + buildingId)?.value;
+  const newRappu = document.getElementById('newrappu-' + buildingId)?.value.trim().toUpperCase();
+  const statusEl = document.querySelector(`input[name="status-${buildingId}"]:checked`);
+  const status = statusEl?.value || 'in_progress';
+  const doors  = parseInt(document.getElementById('doors-' + buildingId)?.value) || null;
+  const notes  = document.getElementById('notes-' + buildingId)?.value.trim() || null;
+  const extra  = document.getElementById('extra-' + buildingId)?.value.trim() || null;
+  const msgEl  = document.getElementById('msg-' + buildingId);
+
+  if (!name) {
+    msgEl.innerHTML = '<div class="report-error">Nimi on pakollinen</div>';
+    return;
+  }
+
+  const btn = msgEl.previousElementSibling;
+  btn.disabled = true;
+  btn.textContent = 'Lahetetaan...';
+  msgEl.innerHTML = '';
+
+  try {
+    let rappuId = null;
+
+    // If "new rappu" was selected, create it first
+    if (rappuSel === '__new' && newRappu && /^[A-Z]$/.test(newRappu)) {
+      rappuId = await createNewRappu(buildingId, newRappu, name);
+    } else if (rappuSel && rappuSel !== '' && rappuSel !== '__new') {
+      rappuId = rappuSel;
+    }
+
+    // Insert visit
+    const { error } = await sb.from('visits').insert({
+      building_id: buildingId,
+      rappu_id: rappuId,
+      visitor_name: name,
+      status: status,
+      doors_count: doors,
+      notes: notes,
+      source: 'map',
+    });
+
+    if (error) throw error;
+
+    // Update rappu status if a rappu was selected
+    if (rappuId) {
+      await sb.from('rappus').update({ status: status }).eq('id', rappuId);
+    }
+
+    // Save extra info as a secret if provided
+    if (extra) {
+      await sb.from('building_secrets').insert({
+        building_id: buildingId,
+        rappu_id: rappuId,
+        secret_type: 'extra',
+        value: extra,
+        contact_name: name,
+        added_by: currentUser?.id || null,
+      });
+    }
+
+    msgEl.innerHTML = '<div class="report-success">Raportti lahetetty!</div>';
+
+    // Refresh data after short delay
+    setTimeout(() => loadData(), 800);
+
+  } catch (err) {
+    msgEl.innerHTML = `<div class="report-error">Virhe: ${esc(err.message)}</div>`;
+    btn.disabled = false;
+    btn.textContent = 'Laheta raportti';
+  }
+}
+
+// Submit visit from RAPPU popup (rappu pre-selected)
+async function submitRappuVisit(buildingId, rappuId, formId) {
+  const name   = document.getElementById('name-' + formId)?.value.trim();
+  const statusEl = document.querySelector(`input[name="status-${formId}"]:checked`);
+  const status = statusEl?.value || 'in_progress';
+  const doors  = parseInt(document.getElementById('doors-' + formId)?.value) || null;
+  const notes  = document.getElementById('notes-' + formId)?.value.trim() || null;
+  const extra  = document.getElementById('extra-' + formId)?.value.trim() || null;
+  const msgEl  = document.getElementById('msg-' + formId);
+
+  if (!name) {
+    msgEl.innerHTML = '<div class="report-error">Nimi on pakollinen</div>';
+    return;
+  }
+
+  const btn = msgEl.previousElementSibling;
+  btn.disabled = true;
+  btn.textContent = 'Lahetetaan...';
+  msgEl.innerHTML = '';
+
+  try {
+    // Insert visit
+    const { error } = await sb.from('visits').insert({
+      building_id: buildingId,
+      rappu_id: rappuId,
+      visitor_name: name,
+      status: status,
+      doors_count: doors,
+      notes: notes,
+      source: 'map',
+    });
+
+    if (error) throw error;
+
+    // Update rappu status
+    await sb.from('rappus').update({ status: status }).eq('id', rappuId);
+
+    // Save extra info as a secret if provided
+    if (extra) {
+      await sb.from('building_secrets').insert({
+        building_id: buildingId,
+        rappu_id: rappuId,
+        secret_type: 'extra',
+        value: extra,
+        contact_name: name,
+        added_by: currentUser?.id || null,
+      });
+    }
+
+    msgEl.innerHTML = '<div class="report-success">Raportti lahetetty!</div>';
+
+    // Refresh data
+    setTimeout(() => loadData(), 800);
+
+  } catch (err) {
+    msgEl.innerHTML = `<div class="report-error">Virhe: ${esc(err.message)}</div>`;
+    btn.disabled = false;
+    btn.textContent = 'Laheta raportti';
+  }
+}
+
+// Create a new rappu and return its ID
+async function createNewRappu(buildingId, letter, addedBy, explicitLatOffset, explicitLngOffset) {
+  // Find the building to get its coords
+  const building = allBuildings.find(b => b.id === buildingId);
+  if (!building) throw new Error('Rakennusta ei loydy');
+
+  let latOffset, lngOffset;
+  if (explicitLatOffset != null && explicitLngOffset != null) {
+    // Use the explicitly provided offsets (from map pick)
+    latOffset = explicitLatOffset;
+    lngOffset = explicitLngOffset;
+  } else {
+    // Auto-calculate circular offset
+    const existingRappus = allRappus.filter(r => r.building_id === buildingId);
+    const total = existingRappus.length + 1;
+    const index = existingRappus.length;
+    const radius = 0.00007;
+    const angle = (index / total) * 2 * Math.PI;
+    latOffset = radius * Math.cos(angle);
+    lngOffset = radius * Math.sin(angle) * 1.6;
+  }
+
+  const { data, error } = await sb.from('rappus').insert({
+    building_id: buildingId,
+    letter: letter,
+    status: 'unvisited',
+    lat_offset: latOffset,
+    lng_offset: lngOffset,
+    added_by: addedBy,
+  }).select().single();
+
+  if (error) throw error;
+  return data.id;
+}
+
+// Submit "Add Rappu" from building popup
+async function submitAddRappu(buildingId) {
+  const letter = document.getElementById('ar-letter-' + buildingId)?.value.trim().toUpperCase();
+  const name   = document.getElementById('ar-name-' + buildingId)?.value.trim();
+  const msgEl  = document.getElementById('ar-msg-' + buildingId);
+
+  if (!letter || !/^[A-Z]$/.test(letter)) {
+    msgEl.innerHTML = '<div class="report-error">Anna yksi kirjain (A-Z)</div>';
+    return;
+  }
+  if (!name) {
+    msgEl.innerHTML = '<div class="report-error">Nimi on pakollinen</div>';
+    return;
+  }
+
+  // Check if rappu already exists
+  const existing = allRappus.find(r => r.building_id === buildingId && r.letter === letter);
+  if (existing) {
+    msgEl.innerHTML = '<div class="report-error">Rappu ' + esc(letter) + ' on jo olemassa</div>';
+    return;
+  }
+
+  const btn = msgEl.previousElementSibling;
+  btn.disabled = true;
+  btn.textContent = 'Lisataan...';
+  msgEl.innerHTML = '';
+
+  try {
+    await createNewRappu(buildingId, letter, name);
+    msgEl.innerHTML = '<div class="report-success">Rappu ' + esc(letter) + ' lisatty!</div>';
+    setTimeout(() => loadData(), 800);
+  } catch (err) {
+    msgEl.innerHTML = '<div class="report-error">Virhe: ' + esc(err.message) + '</div>';
+    btn.disabled = false;
+    btn.textContent = 'Lisaa rappu';
+  }
+}
+
+// Mark building as "no access"
+async function markBuildingNoAccess(buildingId) {
+  const building = allBuildings.find(b => b.id === buildingId);
+  if (!building) return;
+
+  const rappus = allRappus.filter(r => r.building_id === buildingId);
+
+  try {
+    if (rappus.length === 0) {
+      // No rappus — create one placeholder rappu with no_access status
+      const radius = 0.00007;
+      const { error } = await sb.from('rappus').insert({
+        building_id: buildingId,
+        letter: '-',
+        status: 'no_access',
+        lat_offset: radius,
+        lng_offset: 0,
+        added_by: 'system',
+      });
+      if (error) throw error;
+    } else {
+      // Has rappus — set all to no_access
+      const ids = rappus.map(r => r.id);
+      const { error } = await sb.from('rappus').update({ status: 'no_access' }).in('id', ids);
+      if (error) throw error;
+    }
+    map.closePopup();
+    await loadData();
+  } catch (err) {
+    alert('Virhe: ' + err.message);
+  }
+}
+
+// Submit location correction (building or rappu)
+async function submitCorrection(targetType, buildingId, rappuId, formPrefix) {
+  const name = document.getElementById(formPrefix + '-name-' + (rappuId || buildingId))?.value.trim()
+            || document.getElementById('corr-name-' + buildingId)?.value.trim();
+  const desc = document.getElementById(formPrefix + '-desc-' + (rappuId || buildingId))?.value.trim()
+            || document.getElementById('corr-desc-' + buildingId)?.value.trim();
+  const msgEl = document.getElementById(formPrefix + '-msg-' + (rappuId || buildingId))
+             || document.getElementById('corr-msg-' + buildingId);
+
+  if (!name) {
+    msgEl.innerHTML = '<div class="report-error">Nimi on pakollinen</div>';
+    return;
+  }
+  if (!desc) {
+    msgEl.innerHTML = '<div class="report-error">Kuvaus on pakollinen</div>';
+    return;
+  }
+
+  const btn = msgEl.previousElementSibling;
+  btn.disabled = true;
+  btn.textContent = 'Lahetetaan...';
+  msgEl.innerHTML = '';
+
+  try {
+    const row = {
+      target_type: targetType,
+      reported_by: name,
+      description: desc,
+    };
+    if (targetType === 'building') row.building_id = buildingId;
+    if (targetType === 'rappu') row.rappu_id = rappuId;
+
+    const { error } = await sb.from('location_corrections').insert(row);
+    if (error) throw error;
+
+    msgEl.innerHTML = '<div class="report-success">Kiitos! Ilmoitus kirjattu.</div>';
+  } catch (err) {
+    msgEl.innerHTML = '<div class="report-error">Virhe: ' + esc(err.message) + '</div>';
+    btn.disabled = false;
+    btn.textContent = 'Laheta ilmoitus';
+  }
+}
+
+// ================================================================
+// 16. ADD MISSING BUILDING — right-click + sidebar button
+// ================================================================
+
+// Temporary marker for suggested building location
+let suggestMarker = null;
+
+function openSuggestBuildingPopup(lat, lng) {
+  if (suggestMarker) {
+    map.removeLayer(suggestMarker);
+  }
+
+  suggestMarker = L.marker([lat, lng], {
+    draggable: true,
+  }).addTo(map);
+
+  const popupHtml = `
+    <div class="popup-title">Ehdota rakennusta</div>
+    <div class="mini-form" id="suggest-form">
+      <label>Katu</label>
+      <input type="text" id="suggest-street" placeholder="esim. Pahkinatie">
+      <label>Numero</label>
+      <input type="text" id="suggest-number" placeholder="esim. 6">
+      <label>Rappuja (valinnainen, pilkulla)</label>
+      <input type="text" id="suggest-rappus" placeholder="esim. A, B, C">
+      <label>Nimesi</label>
+      <input type="text" id="suggest-name" placeholder="Nimi...">
+      <label>Muuta</label>
+      <textarea id="suggest-notes" placeholder="Lisatietoja..."></textarea>
+      <div style="display:flex;gap:4px;margin-top:6px">
+        <button class="submit-btn" style="flex:1" onclick="geocodeSuggestedBuilding()">Hae sijainti</button>
+        <button class="submit-btn" style="flex:1;background:#27ae60" onclick="submitBuildingSuggestion()">Laheta</button>
+      </div>
+      <div id="suggest-msg"></div>
+    </div>`;
+
+  suggestMarker.bindPopup(popupHtml, { maxWidth: 280, minWidth: 240 }).openPopup();
+
+  // Update marker position if dragged
+  suggestMarker.on('dragend', function () {
+    const pos = suggestMarker.getLatLng();
+    suggestMarker.setLatLng(pos);
+  });
+}
+
+// Right-click on map → suggest building
+map.on('contextmenu', function (e) {
+  openSuggestBuildingPopup(e.latlng.lat, e.latlng.lng);
+});
+
+// Sidebar button → pick location on map, then open suggest form
+document.getElementById('btn-add-building').addEventListener('click', () => {
+  startBuildingSuggestPick();
+});
+
+// Geocode address via Nominatim → move marker
+async function geocodeSuggestedBuilding() {
+  const street = document.getElementById('suggest-street')?.value.trim();
+  const number = document.getElementById('suggest-number')?.value.trim();
+  const msgEl = document.getElementById('suggest-msg');
+
+  if (!street || !number) {
+    msgEl.innerHTML = '<div class="report-error">Tayta katu ja numero ensin</div>';
+    return;
+  }
+
+  msgEl.innerHTML = '<div style="font-size:11px;color:#888">Haetaan sijaintia...</div>';
+
+  try {
+    const query = encodeURIComponent(`${number} ${street}, Vantaa, Finland`);
+    const url = `https://nominatim.openstreetmap.org/search?q=${query}&format=json&limit=1`;
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'Talokartta/2.0 (talokartta@riverchurch.fi)' }
+    });
+    const data = await res.json();
+
+    if (data.length > 0) {
+      const lat = parseFloat(data[0].lat);
+      const lng = parseFloat(data[0].lon);
+      if (suggestMarker) {
+        suggestMarker.setLatLng([lat, lng]);
+        map.setView([lat, lng], 17);
+      }
+      msgEl.innerHTML = '<div style="font-size:11px;color:#27ae60">Sijainti loydetty! Voit siirtaa merkkia.</div>';
+    } else {
+      msgEl.innerHTML = '<div class="report-error">Osoitetta ei loydetty. Siirra merkkia kartalla.</div>';
+    }
+  } catch (err) {
+    msgEl.innerHTML = '<div class="report-error">Geocoding-virhe: ' + esc(err.message) + '</div>';
+  }
+}
+
+// Submit building suggestion
+async function submitBuildingSuggestion() {
+  const street = document.getElementById('suggest-street')?.value.trim();
+  const number = document.getElementById('suggest-number')?.value.trim();
+  const rappus = document.getElementById('suggest-rappus')?.value.trim();
+  const name   = document.getElementById('suggest-name')?.value.trim();
+  const notes  = document.getElementById('suggest-notes')?.value.trim();
+  const msgEl  = document.getElementById('suggest-msg');
+
+  if (!street || !number) {
+    msgEl.innerHTML = '<div class="report-error">Katu ja numero ovat pakollisia</div>';
+    return;
+  }
+  if (!name) {
+    msgEl.innerHTML = '<div class="report-error">Nimi on pakollinen</div>';
+    return;
+  }
+
+  const pos = suggestMarker ? suggestMarker.getLatLng() : null;
+
+  msgEl.innerHTML = '<div style="font-size:11px;color:#888">Lahetetaan...</div>';
+
+  try {
+    // Check if building already exists
+    const existingBuilding = allBuildings.find(b =>
+      b.street.toLowerCase() === street.toLowerCase() && b.number === number
+    );
+
+    if (existingBuilding && rappus) {
+      // Building exists — just add the new rappus to it
+      const letters = rappus.split(/[,\s]+/).map(l => l.trim().toUpperCase()).filter(l => /^[A-Z]$/.test(l));
+      const existingRappus = allRappus.filter(r => r.building_id === existingBuilding.id);
+      const existingLetters = new Set(existingRappus.map(r => r.letter));
+      const newLetters = letters.filter(l => !existingLetters.has(l));
+
+      if (newLetters.length === 0) {
+        msgEl.innerHTML = '<div class="report-error">Rakennus ' + esc(street) + ' ' + esc(number) + ' on jo olemassa, ja kaikki annetut raput ovat jo lisatty.</div>';
+        return;
+      }
+
+      if (isAdmin) {
+        // Admin: add rappus directly
+        const angleStep = (2 * Math.PI) / newLetters.length;
+        const baseOffset = existingRappus.length; // offset angle from existing
+        const rappuRows = newLetters.map((letter, i) => ({
+          building_id: existingBuilding.id,
+          letter: letter,
+          lat_offset: 0.00008 * Math.cos(angleStep * (i + baseOffset)),
+          lng_offset: 0.00008 * Math.sin(angleStep * (i + baseOffset)),
+          status: 'unvisited',
+          added_by: name,
+        }));
+        const { error: rErr } = await sb.from('rappus').insert(rappuRows);
+        if (rErr) throw rErr;
+
+        msgEl.innerHTML = '<div class="report-success">Raput ' + esc(newLetters.join(', ')) + ' lisatty rakennukseen ' + esc(street) + ' ' + esc(number) + '!</div>';
+      } else {
+        // Non-admin: submit as suggestion with note about existing building
+        const row = {
+          street: street,
+          number: number,
+          lat: pos ? pos.lat : parseFloat(existingBuilding.lat),
+          lng: pos ? pos.lng : parseFloat(existingBuilding.lng),
+          suggested_by: name,
+          notes: [rappus ? 'Uudet raput: ' + newLetters.join(', ') : '', notes, '(Rakennus on jo olemassa)'].filter(Boolean).join('. '),
+        };
+        const { error } = await sb.from('building_suggestions').insert(row);
+        if (error) throw error;
+
+        msgEl.innerHTML = '<div class="report-success">Kiitos! Ehdotus uusista rapuista lahetetty kasiteltavaksi.</div>';
+      }
+    } else if (existingBuilding && !rappus) {
+      msgEl.innerHTML = '<div class="report-error">Rakennus ' + esc(street) + ' ' + esc(number) + ' on jo olemassa. Lisaa rappuja kirjoittamalla ne Raput-kenttaan (esim. A, B, C).</div>';
+      return;
+    } else if (isAdmin && pos) {
+      // Admin: create new building directly
+      const { data: newBuilding, error: bErr } = await sb.from('buildings').insert({
+        street: street,
+        number: number,
+        lat: pos.lat,
+        lng: pos.lng,
+        added_by: name,
+        notes: notes || null,
+      }).select().single();
+
+      if (bErr) throw bErr;
+
+      // Create rappus if specified
+      if (rappus) {
+        const letters = rappus.split(/[,\s]+/).map(l => l.trim().toUpperCase()).filter(l => /^[A-Z]$/.test(l));
+        if (letters.length > 0) {
+          const angleStep = (2 * Math.PI) / letters.length;
+          const rappuRows = letters.map((letter, i) => ({
+            building_id: newBuilding.id,
+            letter: letter,
+            lat_offset: 0.00008 * Math.cos(angleStep * i),
+            lng_offset: 0.00008 * Math.sin(angleStep * i),
+            status: 'unvisited',
+            added_by: name,
+          }));
+          const { error: rErr } = await sb.from('rappus').insert(rappuRows);
+          if (rErr) console.warn('Rappu insert error:', rErr);
+        }
+      }
+
+      msgEl.innerHTML = '<div class="report-success">Rakennus lisatty suoraan!</div>';
+    } else {
+      // Non-admin: submit as suggestion for review
+      const row = {
+        street: street,
+        number: number,
+        lat: pos ? pos.lat : null,
+        lng: pos ? pos.lng : null,
+        suggested_by: name,
+        notes: [rappus ? 'Rappuja: ' + rappus : '', notes].filter(Boolean).join('. ') || null,
+      };
+
+      const { error } = await sb.from('building_suggestions').insert(row);
+      if (error) throw error;
+
+      msgEl.innerHTML = '<div class="report-success">Kiitos! Ehdotus lahetetty. Se kasitellaan pian.</div>';
+    }
+
+    // Remove marker after a delay
+    setTimeout(() => {
+      if (suggestMarker) {
+        map.removeLayer(suggestMarker);
+        suggestMarker = null;
+      }
+    }, 2000);
+
+    // Refresh data
+    setTimeout(() => loadData(), 800);
+
+  } catch (err) {
+    msgEl.innerHTML = '<div class="report-error">Virhe: ' + esc(err.message) + '</div>';
+  }
+}
+
+// ================================================================
+// 17. SEARCH
+// ================================================================
+document.getElementById('search-input').addEventListener('input', (e) => {
+  searchQuery = e.target.value.trim();
+  renderList();
+});
+
+// ================================================================
+// 18. BUTTON HANDLERS
+// ================================================================
+document.getElementById('btn-center').addEventListener('click', () => {
+  map.setView(CENTER, ZOOM);
+});
+
+document.getElementById('btn-refresh').addEventListener('click', () => {
+  loadData();
+});
+
+// ================================================================
+// 19. ADMIN PANEL
+// ================================================================
+
+async function loadAdminData() {
+  if (!isAdmin) return;
+
+  try {
+    const [sugRes, corrRes, secRes] = await Promise.all([
+      sb.from('building_suggestions').select('*').eq('status', 'pending').order('created_at', { ascending: false }),
+      sb.from('location_corrections').select('*').eq('status', 'pending').order('created_at', { ascending: false }),
+      sb.from('building_secrets').select('*'),
+    ]);
+
+    pendingSuggestions = sugRes.data || [];
+    pendingCorrections = corrRes.data || [];
+
+    // Build secrets lookup
+    buildingSecrets.clear();
+    (secRes.data || []).forEach(s => {
+      if (!buildingSecrets.has(s.building_id)) buildingSecrets.set(s.building_id, []);
+      buildingSecrets.get(s.building_id).push(s);
+    });
+
+    updateAdminBadge();
+
+  } catch (err) {
+    console.warn('[Admin] Load error:', err);
+  }
+}
+
+function updateAdminBadge() {
+  const badge = document.getElementById('admin-badge');
+  if (!isAdmin) {
+    badge.style.display = 'none';
+    return;
+  }
+
+  const total = pendingSuggestions.length + pendingCorrections.length;
+  if (total > 0) {
+    badge.style.display = 'block';
+    badge.textContent = `\u2699\uFE0F ${total} odottaa kasittelya`;
+  } else {
+    badge.style.display = 'block';
+    badge.textContent = '\u2699\uFE0F Hallintapaneeli';
+  }
+}
+
+function showAdminPanel() {
+  if (!isAdmin) return;
+  document.getElementById('admin-panel').classList.add('visible');
+  window.location.hash = 'admin';
+  renderAdminPanel();
+}
+
+function hideAdminPanel() {
+  document.getElementById('admin-panel').classList.remove('visible');
+  if (window.location.hash === '#admin') {
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+  }
+}
+
+function renderAdminPanel() {
+  renderAdminSuggestions();
+  renderAdminCorrections();
+}
+
+function renderAdminSuggestions() {
+  const container = document.getElementById('admin-suggestions');
+
+  if (pendingSuggestions.length === 0) {
+    container.innerHTML = '<div class="admin-empty">Ei odottavia ehdotuksia</div>';
+    return;
+  }
+
+  const rows = pendingSuggestions.map(s => `
+    <tr>
+      <td>${esc(s.street)} ${esc(s.number)}</td>
+      <td>${s.lat ? parseFloat(s.lat).toFixed(5) + ', ' + parseFloat(s.lng).toFixed(5) : 'Ei sijaintia'}</td>
+      <td>${esc(s.suggested_by)}</td>
+      <td>${esc(fmtDate(s.created_at))}</td>
+      <td>${esc(s.notes || '')}</td>
+      <td>
+        ${s.lat ? `<button class="admin-btn" style="background:#2563eb;color:#fff" onclick="showSuggestionOnMap('${s.id}')">Nayta kartalla</button>` : ''}
+        <button class="admin-btn admin-btn-approve" onclick="approveSuggestion('${s.id}')">Hyvaksy</button>
+        <button class="admin-btn admin-btn-reject" onclick="rejectSuggestion('${s.id}')">Hylkaa</button>
+      </td>
+    </tr>
+  `).join('');
+
+  container.innerHTML = `
+    <table class="admin-table">
+      <thead><tr><th>Osoite</th><th>Sijainti</th><th>Ehdottaja</th><th>Pvm</th><th>Muuta</th><th>Toiminnot</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function renderAdminCorrections() {
+  const container = document.getElementById('admin-corrections');
+
+  if (pendingCorrections.length === 0) {
+    container.innerHTML = '<div class="admin-empty">Ei odottavia korjauksia</div>';
+    return;
+  }
+
+  const rows = pendingCorrections.map(c => {
+    // Try to find the building for display
+    const building = allBuildings.find(b => b.id === c.building_id);
+    const addr = building ? `${building.street} ${building.number}` : (c.building_id || '');
+    const typeLabel = c.target_type === 'rappu' ? 'Rappu' : 'Rakennus';
+
+    return `
+      <tr>
+        <td>${esc(typeLabel)}</td>
+        <td>${esc(addr)}</td>
+        <td>${esc(c.reported_by)}</td>
+        <td>${esc(c.description)}</td>
+        <td>${esc(fmtDate(c.created_at))}</td>
+        <td>
+          <button class="admin-btn admin-btn-fix" onclick="markCorrectionFixed('${c.id}')">Korjattu</button>
+          <button class="admin-btn admin-btn-dismiss" onclick="dismissCorrection('${c.id}')">Ohita</button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  container.innerHTML = `
+    <table class="admin-table">
+      <thead><tr><th>Tyyppi</th><th>Osoite</th><th>Ilmoittaja</th><th>Kuvaus</th><th>Pvm</th><th>Toiminnot</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+// Show suggestion location on map with a temporary marker
+let suggestionPreviewMarker = null;
+function showSuggestionOnMap(suggestionId) {
+  const sug = pendingSuggestions.find(s => s.id === suggestionId);
+  if (!sug || !sug.lat || !sug.lng) return;
+
+  // Close admin panel
+  hideAdminPanel();
+
+  // Remove previous preview marker
+  if (suggestionPreviewMarker) {
+    map.removeLayer(suggestionPreviewMarker);
+  }
+
+  const lat = parseFloat(sug.lat);
+  const lng = parseFloat(sug.lng);
+
+  // Add a distinctive marker
+  suggestionPreviewMarker = L.marker([lat, lng], {
+    icon: L.divIcon({
+      className: '',
+      html: `<div style="background:#7C3AED;color:#fff;padding:4px 8px;border-radius:6px;font-size:12px;font-weight:600;white-space:nowrap;border:2px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.3)">
+        📍 ${sug.street} ${sug.number} (ehdotus)
+      </div>`,
+      iconAnchor: [0, 0],
+    }),
+  }).addTo(map);
+
+  map.setView([lat, lng], 18);
+
+  // Auto-remove after 30 seconds
+  setTimeout(() => {
+    if (suggestionPreviewMarker) {
+      map.removeLayer(suggestionPreviewMarker);
+      suggestionPreviewMarker = null;
+    }
+  }, 30000);
+}
+
+// Approve suggestion → create building
+async function approveSuggestion(suggestionId) {
+  const sug = pendingSuggestions.find(s => s.id === suggestionId);
+  if (!sug) return;
+
+  try {
+    // Check if building already exists
+    const existingBuilding = allBuildings.find(b =>
+      b.street.toLowerCase() === sug.street.toLowerCase() && b.number === sug.number
+    );
+
+    let targetBuildingId;
+
+    if (existingBuilding) {
+      // Building exists — just add rappus
+      targetBuildingId = existingBuilding.id;
+    } else {
+      // Insert new building
+      const { data: newB, error: bErr } = await sb.from('buildings').insert({
+        street: sug.street,
+        number: sug.number,
+        lat: sug.lat,
+        lng: sug.lng,
+        added_by: sug.suggested_by,
+        notes: sug.notes,
+      }).select().single();
+
+      if (bErr) throw bErr;
+      targetBuildingId = newB.id;
+    }
+
+    // Mark suggestion as approved
+    await sb.from('building_suggestions')
+      .update({ status: 'approved', reviewed_at: new Date().toISOString() })
+      .eq('id', suggestionId);
+
+    // Parse rappus from notes if present (match both "Rappuja:" and "Uudet raput:")
+    const rappuMatch = (sug.notes || '').match(/(?:Rappuja|Uudet raput):\s*([A-Za-z,\s]+)/);
+    if (rappuMatch) {
+      const letters = rappuMatch[1].split(/[,\s]+/).map(l => l.trim().toUpperCase()).filter(l => /^[A-Z]$/.test(l));
+      // Filter out already existing rappus
+      const existingRappus = allRappus.filter(r => r.building_id === targetBuildingId);
+      const existingLetters = new Set(existingRappus.map(r => r.letter));
+      const newLetters = letters.filter(l => !existingLetters.has(l));
+
+      if (newLetters.length > 0) {
+        const radius = 0.00007;
+        const baseOffset = existingRappus.length;
+        const rappuInserts = newLetters.map((letter, i) => {
+          const angle = ((i + baseOffset) / (newLetters.length + baseOffset)) * 2 * Math.PI;
+          return {
+            building_id: targetBuildingId,
+            letter: letter,
+            status: 'unvisited',
+            lat_offset: radius * Math.cos(angle),
+            lng_offset: radius * Math.sin(angle) * 1.6,
+            added_by: sug.suggested_by || 'admin',
+          };
+        });
+        await sb.from('rappus').insert(rappuInserts);
+      }
+    }
+
+    // Refresh
+    await loadAdminData();
+    renderAdminPanel();
+    loadData(); // refresh map
+
+  } catch (err) {
+    alert('Virhe: ' + err.message);
+  }
+}
+
+async function rejectSuggestion(suggestionId) {
+  try {
+    await sb.from('building_suggestions')
+      .update({ status: 'rejected', reviewed_at: new Date().toISOString() })
+      .eq('id', suggestionId);
+
+    await loadAdminData();
+    renderAdminPanel();
+
+  } catch (err) {
+    alert('Virhe: ' + err.message);
+  }
+}
+
+async function markCorrectionFixed(correctionId) {
+  try {
+    await sb.from('location_corrections')
+      .update({ status: 'fixed', reviewed_at: new Date().toISOString() })
+      .eq('id', correctionId);
+
+    await loadAdminData();
+    renderAdminPanel();
+
+  } catch (err) {
+    alert('Virhe: ' + err.message);
+  }
+}
+
+async function dismissCorrection(correctionId) {
+  try {
+    await sb.from('location_corrections')
+      .update({ status: 'dismissed', reviewed_at: new Date().toISOString() })
+      .eq('id', correctionId);
+
+    await loadAdminData();
+    renderAdminPanel();
+
+  } catch (err) {
+    alert('Virhe: ' + err.message);
+  }
+}
+
+// ── Secrets in building popup (admin only) ──────────────
+function buildSecretsHtml(buildingId) {
+  if (!isAdmin) return '';
+
+  const secrets = buildingSecrets.get(buildingId) || [];
+
+  const SECRET_TYPE_LABELS = {
+    building_door_code: 'Rakennuksen ovikoodi',
+    rappu_door_code: 'Rapun ovikoodi',
+    contact_phone: 'Puhelinnumero',
+    note: 'Muistiinpano',
+    extra: 'Extra',
+  };
+
+  let secretRows = '';
+  if (secrets.length > 0) {
+    secretRows = '<table>' + secrets.map(s => {
+      const typeLabel = SECRET_TYPE_LABELS[s.secret_type] || s.secret_type;
+      const rappu = s.rappu_id ? allRappus.find(r => r.id === s.rappu_id) : null;
+      const rappuSuffix = rappu ? ` (Rappu ${esc(rappu.letter)})` : '';
+      const contactName = s.contact_name ? ` — ${esc(s.contact_name)}` : '';
+      return `<tr>
+        <td class="secret-type">${esc(typeLabel)}${rappuSuffix}:</td>
+        <td class="secret-value">${esc(s.value)}${contactName}</td>
+      </tr>`;
+    }).join('') + '</table>';
+  } else {
+    secretRows = '<div style="color:#a16207;font-size:11px">Ei tallennettuja tietoja</div>';
+  }
+
+  // Get rappus for this building for the add-secret form
+  const rappus = allRappus.filter(r => r.building_id === buildingId)
+    .sort((a, b) => a.letter.localeCompare(b.letter));
+  const rappuOpts = rappus.map(r =>
+    `<option value="${esc(r.id)}">${esc(r.letter)}</option>`
+  ).join('');
+
+  return `
+    <div class="popup-secrets">
+      <div class="popup-secrets-title">\uD83D\uDD11 Salaiset tiedot</div>
+      ${secretRows}
+      <div style="margin-top:6px">
+        <a style="font-size:10px;color:#a16207;cursor:pointer;text-decoration:underline" onclick="toggleReportForm('addsecret-${buildingId}')">+ Lisaa tieto</a>
+      </div>
+    </div>
+    <div id="addsecret-${buildingId}" style="display:none">
+      <div class="mini-form" style="background:#fefce8;border-color:#fde68a">
+        <label>Tyyppi</label>
+        <select id="sectype-${buildingId}">
+          <option value="building_door_code">Rakennuksen ovikoodi</option>
+          <option value="rappu_door_code">Rapun ovikoodi</option>
+          <option value="contact_phone">Puhelinnumero</option>
+          <option value="note">Muistiinpano</option>
+        </select>
+        <label>Rappu (valinnainen)</label>
+        <select id="secrappu-${buildingId}">
+          <option value="">— Koko rakennus —</option>
+          ${rappuOpts}
+        </select>
+        <label>Arvo (koodi, numero tms.)</label>
+        <input type="text" id="secvalue-${buildingId}" placeholder="esim. 1234#">
+        <label>Yhteyshenkilon nimi (valinnainen)</label>
+        <input type="text" id="seccontact-${buildingId}" placeholder="esim. Maija P.">
+        <button class="submit-btn" style="background:#a16207" onclick="submitSecret('${buildingId}')">Tallenna</button>
+        <div id="secmsg-${buildingId}"></div>
+      </div>
+    </div>`;
+}
+
+function buildRappuSecretsHtml(buildingId, rappuId, rappuLetter) {
+  if (!isAdmin) return '';
+
+  const allSecrets = buildingSecrets.get(buildingId) || [];
+  // Show secrets that belong to this rappu OR to the whole building (no rappu_id)
+  const secrets = allSecrets.filter(s => s.rappu_id === rappuId || !s.rappu_id);
+
+  const SECRET_TYPE_LABELS = {
+    building_door_code: 'Rakennuksen ovikoodi',
+    rappu_door_code: 'Rapun ovikoodi',
+    contact_phone: 'Puhelinnumero',
+    note: 'Muistiinpano',
+    extra: 'Extra',
+  };
+
+  let secretRows = '';
+  if (secrets.length > 0) {
+    secretRows = '<table>' + secrets.map(s => {
+      const typeLabel = SECRET_TYPE_LABELS[s.secret_type] || s.secret_type;
+      const contactName = s.contact_name ? ` — ${esc(s.contact_name)}` : '';
+      return `<tr>
+        <td class="secret-type">${esc(typeLabel)}:</td>
+        <td class="secret-value">${esc(s.value)}${contactName}</td>
+      </tr>`;
+    }).join('') + '</table>';
+  } else {
+    secretRows = '<div style="color:#a16207;font-size:11px">Ei tallennettuja tietoja</div>';
+  }
+
+  return `
+    <div class="popup-secrets">
+      <div class="popup-secrets-title">\uD83D\uDD11 Salaiset tiedot</div>
+      ${secretRows}
+    </div>`;
+}
+
+async function submitSecret(buildingId) {
+  const secretType = document.getElementById('sectype-' + buildingId)?.value;
+  const rappuId = document.getElementById('secrappu-' + buildingId)?.value || null;
+  const value = document.getElementById('secvalue-' + buildingId)?.value.trim();
+  const contactName = document.getElementById('seccontact-' + buildingId)?.value.trim() || null;
+  const msgEl = document.getElementById('secmsg-' + buildingId);
+
+  if (!value) {
+    msgEl.innerHTML = '<div class="report-error">Arvo on pakollinen</div>';
+    return;
+  }
+
+  try {
+    const { error } = await sb.from('building_secrets').insert({
+      building_id: buildingId,
+      rappu_id: rappuId,
+      secret_type: secretType,
+      value: value,
+      contact_name: contactName,
+      added_by: currentUser?.id || null,
+    });
+
+    if (error) throw error;
+
+    msgEl.innerHTML = '<div class="report-success">Tallennettu!</div>';
+
+    // Refresh secrets
+    await loadAdminData();
+    setTimeout(() => loadData(), 500);
+
+  } catch (err) {
+    msgEl.innerHTML = '<div class="report-error">Virhe: ' + esc(err.message) + '</div>';
+  }
+}
+
+// Handle #admin hash route
+function checkAdminHash() {
+  if (window.location.hash === '#admin' && isAdmin) {
+    showAdminPanel();
+  }
+}
+
+window.addEventListener('hashchange', checkAdminHash);
+
+// ================================================================
+// 19b. MOBILE SIDEBAR TOGGLE
+// ================================================================
+document.getElementById('sidebar-toggle').addEventListener('click', () => {
+  const sidebar = document.getElementById('sidebar');
+  const isOpen = sidebar.classList.toggle('mobile-open');
+  document.getElementById('sidebar-toggle').textContent = isOpen ? '\u2716' : '\uD83D\uDCCB';
+});
+
+// ================================================================
+// 20. BOOT
+// ================================================================
+
+// Check existing session, then load data
+(async function boot() {
+  // Auth with timeout — if auth hangs, load data anyway
+  const authTimeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Auth timeout')), 5000));
+  try {
+    await Promise.race([
+      (async () => {
+        const { data: { session } } = await sb.auth.getSession();
+        if (session?.user) {
+          currentUser = session.user;
+          await loadProfile(currentUser.id);
+          updateUIForAuthState();
+          if (isAdmin) {
+            await loadAdminData();
+            checkAdminHash();
+          }
+        }
+      })(),
+      authTimeout,
+    ]);
+  } catch (err) {
+    console.warn('[Auth] Session check error:', err.message);
+    // If auth is stuck, clear storage directly (don't await signOut — it may also hang)
+    if (err.message === 'Auth timeout') {
+      console.warn('[Auth] Clearing stuck session...');
+      try { localStorage.clear(); } catch (e) {}
+      try { sessionStorage.clear(); } catch (e) {}
+    }
+  }
+
+  loadData();
+})();
+</script>
+</body>
+</html>
