@@ -1129,6 +1129,14 @@ async function loadData() {
     renderAll();
 
   } catch (err) {
+    // Auto-recover from auth lock errors
+    if (err.message && (err.message.includes('Lock') || err.message.includes('lock') || err.message.includes('stolen') || err.message.includes('AbortError'))) {
+      console.warn('[Talokartta] Auth lock error, clearing storage and retrying...');
+      try { localStorage.clear(); } catch (e) {}
+      try { sessionStorage.clear(); } catch (e) {}
+      location.reload();
+      return;
+    }
     errorBanner.style.display = 'block';
     errorBanner.innerHTML = esc(err.message) + ' <a href="javascript:location.reload()" style="color:white;text-decoration:underline;margin-left:8px">Lataa uudelleen</a>';
     console.error('[Talokartta]', err);
