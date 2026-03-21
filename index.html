@@ -813,8 +813,11 @@
     <button class="admin-close" onclick="hideAdminPanel()">Sulje</button>
   </div>
   <div class="admin-section">
-    <h3>Rakennusehdotukset</h3>
+    <h3>Viimeaikaiset lisaykset (30 pv)</h3>
     <div id="admin-suggestions"></div>
+
+    <h3>Taloraportti — viimeaikaiset raportit</h3>
+    <div id="admin-visits"></div>
 
     <h3>Sijaintikorjaukset</h3>
     <div id="admin-corrections"></div>
@@ -1148,9 +1151,23 @@ function renderAll() {
 // 8. RENDER — MAP MARKERS
 // ================================================================
 
+const isMobile = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+
+function getZoomScale() {
+  const zoom = map.getZoom();
+  // Scale up as user zooms in (base zoom ~15)
+  if (zoom <= 14) return 0.8;
+  if (zoom <= 15) return 1.0;
+  if (zoom <= 16) return 1.3;
+  if (zoom <= 17) return 1.7;
+  return 2.0;
+}
+
 function defaultBuildingStyle(status) {
+  const scale = getZoomScale();
+  const mobileBonus = isMobile ? 1.3 : 1;
   return {
-    radius:      14,
+    radius:      Math.round(14 * scale * mobileBonus),
     weight:      2,
     color:       '#fff',
     fillColor:   STATUS_COLOR[status] || '#9CA3AF',
@@ -1159,8 +1176,10 @@ function defaultBuildingStyle(status) {
 }
 
 function defaultRappuStyle(status) {
+  const scale = getZoomScale();
+  const mobileBonus = isMobile ? 1.3 : 1;
   return {
-    radius:      8,
+    radius:      Math.round(8 * scale * mobileBonus),
     weight:      2,
     color:       '#fff',
     fillColor:   STATUS_COLOR[status] || '#9CA3AF',
@@ -1240,6 +1259,22 @@ function renderMarkers() {
   map.off('popupclose', clearHighlights);
   map.on('popupclose', clearHighlights);
 }
+
+// Resize circles on zoom
+map.on('zoomend', function () {
+  buildingLayerGroup.eachLayer(layer => {
+    if (layer.setRadius) {
+      const style = defaultBuildingStyle(layer.options.status);
+      layer.setRadius(style.radius);
+    }
+  });
+  rappuLayers.forEach(layer => {
+    if (layer.setRadius) {
+      const style = defaultRappuStyle(layer.options.status);
+      layer.setRadius(style.radius);
+    }
+  });
+});
 
 // ================================================================
 // 9. RAPPU GROUPING HIGHLIGHT
@@ -2221,42 +2256,28 @@ async function submitBuildingSuggestion() {
         return;
       }
 
-      if (isAdmin) {
-        // Admin: add rappus directly
-        const angleStep = (2 * Math.PI) / newLetters.length;
-        const baseOffset = existingRappus.length; // offset angle from existing
-        const rappuRows = newLetters.map((letter, i) => ({
-          building_id: existingBuilding.id,
-          letter: letter,
-          lat_offset: 0.00008 * Math.cos(angleStep * (i + baseOffset)),
-          lng_offset: 0.00008 * Math.sin(angleStep * (i + baseOffset)),
-          status: 'unvisited',
-          added_by: name,
-        }));
-        const { error: rErr } = await sb.from('rappus').insert(rappuRows);
-        if (rErr) throw rErr;
+      // Add rappus directly
+      const angleStep = (2 * Math.PI) / newLetters.length;
+      const baseOffset = existingRappus.length;
+      const rappuRows = newLetters.map((letter, i) => ({
+        building_id: existingBuilding.id,
+        letter: letter,
+        lat_offset: 0.00008 * Math.cos(angleStep * (i + baseOffset)),
+        lng_offset: 0.00008 * Math.sin(angleStep * (i + baseOffset)),
+        status: 'unvisited',
+        added_by: name,
+      }));
+      const { error: rErr } = await sb.from('rappus').insert(rappuRows);
+      if (rErr) throw rErr;
 
-        msgEl.innerHTML = '<div class="report-success">Raput ' + esc(newLetters.join(', ')) + ' lisatty rakennukseen ' + esc(street) + ' ' + esc(number) + '!</div>';
-      } else {
-        // Non-admin: submit as suggestion with note about existing building
-        const row = {
-          street: street,
-          number: number,
-          lat: pos ? pos.lat : parseFloat(existingBuilding.lat),
-          lng: pos ? pos.lng : parseFloat(existingBuilding.lng),
-          suggested_by: name,
-          notes: [rappus ? 'Uudet raput: ' + newLetters.join(', ') : '', notes, '(Rakennus on jo olemassa)'].filter(Boolean).join('. '),
-        };
-        const { error } = await sb.from('building_suggestions').insert(row);
-        if (error) throw error;
+      msgEl.innerHTML = '<div class="report-success">Raput ' + esc(newLetters.join(', ')) + ' lisatty rakennukseen ' + esc(street) + ' ' + esc(number) + '!</div>';
 
-        msgEl.innerHTML = '<div class="report-success">Kiitos! Ehdotus uusista rapuista lahetetty kasiteltavaksi.</div>';
-      }
     } else if (existingBuilding && !rappus) {
       msgEl.innerHTML = '<div class="report-error">Rakennus ' + esc(street) + ' ' + esc(number) + ' on jo olemassa. Lisaa rappuja kirjoittamalla ne Raput-kenttaan (esim. A, B, C).</div>';
       return;
-    } else if (isAdmin && pos) {
-      // Admin: create new building directly
+
+    } else if (pos) {
+      // Create new building directly
       const { data: newBuilding, error: bErr } = await sb.from('buildings').insert({
         street: street,
         number: number,
@@ -2286,22 +2307,11 @@ async function submitBuildingSuggestion() {
         }
       }
 
-      msgEl.innerHTML = '<div class="report-success">Rakennus lisatty suoraan!</div>';
+      msgEl.innerHTML = '<div class="report-success">Rakennus lisatty!</div>';
+
     } else {
-      // Non-admin: submit as suggestion for review
-      const row = {
-        street: street,
-        number: number,
-        lat: pos ? pos.lat : null,
-        lng: pos ? pos.lng : null,
-        suggested_by: name,
-        notes: [rappus ? 'Rappuja: ' + rappus : '', notes].filter(Boolean).join('. ') || null,
-      };
-
-      const { error } = await sb.from('building_suggestions').insert(row);
-      if (error) throw error;
-
-      msgEl.innerHTML = '<div class="report-success">Kiitos! Ehdotus lahetetty. Se kasitellaan pian.</div>';
+      msgEl.innerHTML = '<div class="report-error">Valitse sijainti kartalta ensin.</div>';
+      return;
     }
 
     // Remove marker after a delay
@@ -2343,18 +2353,29 @@ document.getElementById('btn-refresh').addEventListener('click', () => {
 // 19. ADMIN PANEL
 // ================================================================
 
+let recentBuildings = [];
+let recentRappus = [];
+let recentVisits = [];
+
 async function loadAdminData() {
   if (!isAdmin) return;
 
   try {
-    const [sugRes, corrRes, secRes] = await Promise.all([
-      sb.from('building_suggestions').select('*').eq('status', 'pending').order('created_at', { ascending: false }),
+    // Get data from last 30 days for review
+    const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+    const [corrRes, secRes, bldRes, rapRes, visRes] = await Promise.all([
       sb.from('location_corrections').select('*').eq('status', 'pending').order('created_at', { ascending: false }),
       sb.from('building_secrets').select('*'),
+      sb.from('buildings').select('*').gte('created_at', since).order('created_at', { ascending: false }),
+      sb.from('rappus').select('*').gte('created_at', since).order('created_at', { ascending: false }),
+      sb.from('visits').select('*').gte('visited_at', since).order('visited_at', { ascending: false }),
     ]);
 
-    pendingSuggestions = sugRes.data || [];
     pendingCorrections = corrRes.data || [];
+    recentBuildings = bldRes.data || [];
+    recentRappus = rapRes.data || [];
+    recentVisits = visRes.data || [];
 
     // Build secrets lookup
     buildingSecrets.clear();
@@ -2377,10 +2398,10 @@ function updateAdminBadge() {
     return;
   }
 
-  const total = pendingSuggestions.length + pendingCorrections.length;
+  const total = pendingCorrections.length;
   if (total > 0) {
     badge.style.display = 'block';
-    badge.textContent = `\u2699\uFE0F ${total} odottaa kasittelya`;
+    badge.textContent = `\u2699\uFE0F ${total} korjausta + Hallinta`;
   } else {
     badge.style.display = 'block';
     badge.textContent = '\u2699\uFE0F Hallintapaneeli';
@@ -2402,38 +2423,113 @@ function hideAdminPanel() {
 }
 
 function renderAdminPanel() {
-  renderAdminSuggestions();
+  renderAdminRecentAdditions();
+  renderAdminRecentVisits();
   renderAdminCorrections();
 }
 
-function renderAdminSuggestions() {
+function renderAdminRecentAdditions() {
   const container = document.getElementById('admin-suggestions');
 
-  if (pendingSuggestions.length === 0) {
-    container.innerHTML = '<div class="admin-empty">Ei odottavia ehdotuksia</div>';
+  if (recentBuildings.length === 0 && recentRappus.length === 0) {
+    container.innerHTML = '<div class="admin-empty">Ei viimeaikaisia lisayksia (30 pv)</div>';
     return;
   }
 
-  const rows = pendingSuggestions.map(s => `
-    <tr>
-      <td>${esc(s.street)} ${esc(s.number)}</td>
-      <td>${s.lat ? parseFloat(s.lat).toFixed(5) + ', ' + parseFloat(s.lng).toFixed(5) : 'Ei sijaintia'}</td>
-      <td>${esc(s.suggested_by)}</td>
-      <td>${esc(fmtDate(s.created_at))}</td>
-      <td>${esc(s.notes || '')}</td>
-      <td>
-        ${s.lat ? `<button class="admin-btn" style="background:#2563eb;color:#fff" onclick="showSuggestionOnMap('${s.id}')">Nayta kartalla</button>` : ''}
-        <button class="admin-btn admin-btn-approve" onclick="approveSuggestion('${s.id}')">Hyvaksy</button>
-        <button class="admin-btn admin-btn-reject" onclick="rejectSuggestion('${s.id}')">Hylkaa</button>
-      </td>
-    </tr>
-  `).join('');
+  let html = '';
+
+  // Recent buildings
+  if (recentBuildings.length > 0) {
+    const bRows = recentBuildings.map(b => `
+      <tr>
+        <td><strong>${esc(b.street)} ${esc(b.number)}</strong></td>
+        <td>${esc(b.added_by || '-')}</td>
+        <td>${esc(fmtDate(b.created_at))}</td>
+        <td>${b.notes ? esc(b.notes) : ''}</td>
+        <td>
+          <button class="admin-btn" style="background:#2563eb;color:#fff;font-size:10px" onclick="map.setView([${b.lat},${b.lng}],18);hideAdminPanel()">Nayta</button>
+          <button class="admin-btn admin-btn-reject" style="font-size:10px" onclick="deleteBuilding('${b.id}')">Poista</button>
+        </td>
+      </tr>
+    `).join('');
+
+    html += `<h4 style="margin:8px 0 4px;color:#374151">Uudet rakennukset (${recentBuildings.length})</h4>
+      <table class="admin-table">
+        <thead><tr><th>Osoite</th><th>Lisaaja</th><th>Pvm</th><th>Muuta</th><th>Toiminnot</th></tr></thead>
+        <tbody>${bRows}</tbody>
+      </table>`;
+  }
+
+  // Recent rappus
+  if (recentRappus.length > 0) {
+    const rRows = recentRappus.map(r => {
+      const b = allBuildings.find(b => b.id === r.building_id);
+      const addr = b ? `${b.street} ${b.number}` : '?';
+      return `
+        <tr>
+          <td>${esc(addr)} — Rappu ${esc(r.letter)}</td>
+          <td>${esc(r.added_by || '-')}</td>
+          <td>${esc(fmtDate(r.created_at))}</td>
+          <td>${esc(r.status)}</td>
+        </tr>
+      `;
+    }).join('');
+
+    html += `<h4 style="margin:12px 0 4px;color:#374151">Uudet raput (${recentRappus.length})</h4>
+      <table class="admin-table">
+        <thead><tr><th>Rakennus / Rappu</th><th>Lisaaja</th><th>Pvm</th><th>Tila</th></tr></thead>
+        <tbody>${rRows}</tbody>
+      </table>`;
+  }
+
+  container.innerHTML = html;
+}
+
+function renderAdminRecentVisits() {
+  const container = document.getElementById('admin-visits') || createAdminVisitsContainer();
+
+  if (recentVisits.length === 0) {
+    container.innerHTML = '<div class="admin-empty">Ei viimeaikaisia raportteja (30 pv)</div>';
+    return;
+  }
+
+  const STATUS_LABELS = { done: 'Valmis', in_progress: 'Kaynnissa', no_access: 'Ei paasya', unvisited: 'Kaymatta' };
+
+  const rows = recentVisits.map(v => {
+    const b = allBuildings.find(b => b.id === v.building_id);
+    const r = v.rappu_id ? allRappus.find(r => r.id === v.rappu_id) : null;
+    const addr = b ? `${b.street} ${b.number}` : '?';
+    const rappu = r ? ` / ${r.letter}` : '';
+    return `
+      <tr>
+        <td>${esc(addr)}${esc(rappu)}</td>
+        <td>${esc(v.visitor_name || '-')}</td>
+        <td>${esc(STATUS_LABELS[v.status] || v.status)}</td>
+        <td>${v.doors_count || '-'}</td>
+        <td>${esc(v.notes || '')}</td>
+        <td>${esc(fmtDate(v.visited_at))}</td>
+      </tr>
+    `;
+  }).join('');
 
   container.innerHTML = `
     <table class="admin-table">
-      <thead><tr><th>Osoite</th><th>Sijainti</th><th>Ehdottaja</th><th>Pvm</th><th>Muuta</th><th>Toiminnot</th></tr></thead>
+      <thead><tr><th>Osoite</th><th>Raportoija</th><th>Tila</th><th>Ovia</th><th>Muuta</th><th>Pvm</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
+}
+
+function createAdminVisitsContainer() {
+  // Insert visits section into admin panel if not already there
+  const panel = document.getElementById('admin-panel');
+  const existing = document.getElementById('admin-visits');
+  if (existing) return existing;
+
+  const corrSection = document.getElementById('admin-corrections');
+  const section = document.createElement('div');
+  section.innerHTML = '<div class="admin-header">Taloraportti — viimeaikaset raportit</div><div id="admin-visits"></div>';
+  corrSection.parentNode.insertBefore(section, corrSection);
+  return document.getElementById('admin-visits');
 }
 
 function renderAdminCorrections() {
@@ -2512,6 +2608,26 @@ function showSuggestionOnMap(suggestionId) {
 }
 
 // Approve suggestion → create building
+async function deleteBuilding(buildingId) {
+  if (!confirm('Haluatko varmasti poistaa taman rakennuksen ja kaikki sen raput?')) return;
+
+  try {
+    // Delete rappus first (foreign key)
+    await sb.from('rappus').delete().eq('building_id', buildingId);
+    // Delete visits
+    await sb.from('visits').delete().eq('building_id', buildingId);
+    // Delete building
+    const { error } = await sb.from('buildings').delete().eq('id', buildingId);
+    if (error) throw error;
+
+    await loadData();
+    await loadAdminData();
+    renderAdminPanel();
+  } catch (err) {
+    alert('Virhe: ' + err.message);
+  }
+}
+
 async function approveSuggestion(suggestionId) {
   const sug = pendingSuggestions.find(s => s.id === suggestionId);
   if (!sug) return;
