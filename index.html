@@ -1127,16 +1127,26 @@ async function loadData() {
     });
 
     renderAll();
+    try { sessionStorage.removeItem('talokartta_retry'); } catch (e) {}
 
   } catch (err) {
-    // Auto-recover from auth lock errors
-    if (err.message && (err.message.includes('Lock') || err.message.includes('lock') || err.message.includes('stolen') || err.message.includes('AbortError'))) {
-      console.warn('[Talokartta] Auth lock error, clearing storage and retrying...');
-      try { localStorage.clear(); } catch (e) {}
-      try { sessionStorage.clear(); } catch (e) {}
+    // Auto-recover: if this is the first failure, clear auth storage and retry
+    const isLockError = err.message && (err.message.includes('Lock') || err.message.includes('lock') || err.message.includes('stolen') || err.message.includes('AbortError'));
+    const hasRetried = sessionStorage.getItem('talokartta_retry');
+
+    if (!hasRetried) {
+      console.warn('[Talokartta] Load failed, clearing auth and retrying...', err.message);
+      try {
+        // Clear only Supabase auth keys, not everything
+        Object.keys(localStorage).forEach(k => { if (k.startsWith('sb-')) localStorage.removeItem(k); });
+        sessionStorage.setItem('talokartta_retry', '1');
+      } catch (e) {}
       location.reload();
       return;
     }
+
+    // Second failure — show error to user
+    try { sessionStorage.removeItem('talokartta_retry'); } catch (e) {}
     errorBanner.style.display = 'block';
     errorBanner.innerHTML = esc(err.message) + ' <a href="javascript:location.reload()" style="color:white;text-decoration:underline;margin-left:8px">Lataa uudelleen</a>';
     console.error('[Talokartta]', err);
@@ -2364,6 +2374,8 @@ document.getElementById('btn-refresh').addEventListener('click', () => {
 let recentBuildings = [];
 let recentRappus = [];
 let recentVisits = [];
+let adminBuildingMap = new Map();
+let adminRappuMap = new Map();
 
 async function loadAdminData() {
   if (!isAdmin) return;
@@ -2372,18 +2384,26 @@ async function loadAdminData() {
     // Get data from last 30 days for review
     const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
-    const [corrRes, secRes, bldRes, rapRes, visRes] = await Promise.all([
+    const [corrRes, secRes, bldRes, rapRes, visRes, allBldRes, allRapRes] = await Promise.all([
       sb.from('location_corrections').select('*').eq('status', 'pending').order('created_at', { ascending: false }),
       sb.from('building_secrets').select('*'),
       sb.from('buildings').select('*').gte('created_at', since).order('created_at', { ascending: false }),
       sb.from('rappus').select('*').gte('created_at', since).order('created_at', { ascending: false }),
       sb.from('visits').select('*').gte('visited_at', since).order('visited_at', { ascending: false }),
+      sb.from('buildings').select('id, street, number'),
+      sb.from('rappus').select('id, letter'),
     ]);
 
     pendingCorrections = corrRes.data || [];
     recentBuildings = bldRes.data || [];
     recentRappus = rapRes.data || [];
     recentVisits = visRes.data || [];
+
+    // Build lookup maps for admin panel address resolution
+    adminBuildingMap = new Map();
+    (allBldRes.data || []).forEach(b => adminBuildingMap.set(b.id, b));
+    adminRappuMap = new Map();
+    (allRapRes.data || []).forEach(r => adminRappuMap.set(r.id, r));
 
     // Build secrets lookup
     buildingSecrets.clear();
@@ -2471,7 +2491,7 @@ function renderAdminRecentAdditions() {
   // Recent rappus
   if (recentRappus.length > 0) {
     const rRows = recentRappus.map(r => {
-      const b = allBuildings.find(b => b.id === r.building_id);
+      const b = adminBuildingMap.get(r.building_id) || allBuildings.find(b => b.id === r.building_id);
       const addr = b ? `${b.street} ${b.number}` : '?';
       return `
         <tr>
@@ -2504,8 +2524,8 @@ function renderAdminRecentVisits() {
   const STATUS_LABELS = { done: 'Valmis', in_progress: 'Kaynnissa', no_access: 'Ei paasya', unvisited: 'Kaymatta' };
 
   const rows = recentVisits.map(v => {
-    const b = allBuildings.find(b => b.id === v.building_id);
-    const r = v.rappu_id ? allRappus.find(r => r.id === v.rappu_id) : null;
+    const b = adminBuildingMap.get(v.building_id) || allBuildings.find(b => b.id === v.building_id);
+    const r = v.rappu_id ? (adminRappuMap.get(v.rappu_id) || allRappus.find(r => r.id === v.rappu_id)) : null;
     const addr = b ? `${b.street} ${b.number}` : '?';
     const rappu = r ? ` / ${r.letter}` : '';
     return `
@@ -2934,12 +2954,10 @@ document.getElementById('sidebar-toggle').addEventListener('click', () => {
     ]);
   } catch (err) {
     console.warn('[Auth] Session check error:', err.message);
-    // If auth is stuck, clear storage directly (don't await signOut — it may also hang)
-    if (err.message === 'Auth timeout') {
-      console.warn('[Auth] Clearing stuck session...');
-      try { localStorage.clear(); } catch (e) {}
-      try { sessionStorage.clear(); } catch (e) {}
-    }
+    // Clear Supabase auth keys to prevent lock issues
+    try {
+      Object.keys(localStorage).forEach(k => { if (k.startsWith('sb-')) localStorage.removeItem(k); });
+    } catch (e) {}
   }
 
   loadData();
