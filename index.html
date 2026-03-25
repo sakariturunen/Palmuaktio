@@ -117,6 +117,33 @@
       outline: none;
     }
     #search-input:focus { border-color: #2c3e50; }
+    #area-tabs {
+      display: flex;
+      gap: 0;
+      padding: 0 10px;
+      border-bottom: 2px solid #e5e7eb;
+      flex-shrink: 0;
+      overflow-x: auto;
+    }
+    .area-tab {
+      padding: 6px 10px;
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      background: none;
+      color: #6b7280;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -2px;
+      white-space: nowrap;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .area-tab:hover { color: #2c3e50; }
+    .area-tab.active {
+      color: #2c3e50;
+      border-bottom-color: #2c3e50;
+      font-weight: 600;
+    }
     #filter-chips {
       display: flex;
       flex-wrap: wrap;
@@ -799,6 +826,7 @@
       </div>
       <input type="text" id="search-input" placeholder="Hae kadun nimella...">
     </div>
+    <div id="area-tabs"></div>
     <div id="filter-chips"></div>
     <div id="building-list"></div>
   </div>
@@ -839,8 +867,17 @@ window.addEventListener('unhandledrejection', function(e) {
 const SUPABASE_URL  = 'https://fwejgtviwukdcdvmdxgo.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ3ZWpndHZpd3VrZGNkdm1keGdvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM1ODc0OTQsImV4cCI6MjA4OTE2MzQ5NH0.QimTz3WepIZT7r2b8w7Rn77jFVvjIImmIRETc85qBg0';
 
-const CENTER = [60.26345, 24.79881];
-const ZOOM   = 16;
+const CENTER = [60.265, 24.793];
+const ZOOM   = 14;
+
+// Area definitions
+const AREAS = {
+  Kaikki:        { label: 'Kaikki',        center: [60.265, 24.793], zoom: 14, bounds: null },
+  Pahkinarinne:  { label: 'Pähkinärinne',  center: [60.2635, 24.7988],  zoom: 16, bounds: [[60.257, 24.785], [60.270, 24.808]] },
+  Hameenkyla:    { label: 'Hämeenkylä',     center: [60.268076, 24.796972], zoom: 16, bounds: [[60.262, 24.785], [60.275, 24.810]] },
+  Varisto:       { label: 'Varisto',        center: [60.269584, 24.814931], zoom: 16, bounds: [[60.263, 24.805], [60.276, 24.828]] },
+  Vapaala:       { label: 'Vapaala',        center: [60.261224, 24.825071], zoom: 16, bounds: [[60.254, 24.815], [60.268, 24.838]] },
+};
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
 
@@ -883,6 +920,7 @@ let allBuildings  = [];   // from building_status view
 let allRappus     = [];   // from rappus table
 let allVisits     = [];   // from visits table
 let currentFilter = 'Kaikki';
+let currentArea   = 'Kaikki';
 let searchQuery   = '';
 
 // Auth state
@@ -1158,7 +1196,47 @@ async function loadData() {
 // ================================================================
 // 7. RENDER — ALL
 // ================================================================
+function buildingInArea(b) {
+  if (currentArea === 'Kaikki') return true;
+  const area = AREAS[currentArea];
+  if (!area || !area.bounds) return true;
+  const [[s, w], [n, e]] = area.bounds;
+  const lat = parseFloat(b.lat);
+  const lng = parseFloat(b.lng);
+  return lat >= s && lat <= n && lng >= w && lng <= e;
+}
+
+function getAreaBuildings() {
+  return allBuildings.filter(buildingInArea);
+}
+
+function renderAreaTabs() {
+  const container = document.getElementById('area-tabs');
+  container.innerHTML = Object.entries(AREAS).map(([key, area]) => {
+    const active = currentArea === key ? ' active' : '';
+    const count = allBuildings.filter(b => {
+      if (key === 'Kaikki') return true;
+      const a = AREAS[key];
+      if (!a.bounds) return true;
+      const [[s, w], [n, e]] = a.bounds;
+      return parseFloat(b.lat) >= s && parseFloat(b.lat) <= n && parseFloat(b.lng) >= w && parseFloat(b.lng) <= e;
+    }).length;
+    return `<button class="area-tab${active}" data-area="${key}">${area.label} (${count})</button>`;
+  }).join('');
+}
+
+// Use event delegation for area tabs (survives re-renders)
+document.getElementById('area-tabs').addEventListener('click', (e) => {
+  const btn = e.target.closest('.area-tab');
+  if (!btn) return;
+  currentArea = btn.dataset.area;
+  const area = AREAS[currentArea];
+  map.setView(area.center, area.zoom);
+  renderAll();
+});
+
 function renderAll() {
+  renderAreaTabs();
   renderMarkers();
   renderStats();
   renderFilters();
@@ -1222,6 +1300,9 @@ function renderMarkers() {
     const lat = parseFloat(b.lat);
     const lng = parseFloat(b.lng);
     if (!isFinite(lat) || !isFinite(lng)) return;
+
+    // Area filter
+    if (!buildingInArea(b)) return;
 
     const status = b.computed_status || 'unvisited';
 
@@ -1549,13 +1630,14 @@ function buildRappuPopup(b, rappu) {
 // 12. RENDER — STATS BAR
 // ================================================================
 function renderStats() {
+  const areaBuildings = getAreaBuildings();
   const counts = { unvisited: 0, in_progress: 0, done: 0, no_access: 0 };
-  allBuildings.forEach(b => {
+  areaBuildings.forEach(b => {
     const s = b.computed_status || 'unvisited';
     if (s in counts) counts[s]++;
   });
 
-  const total = allBuildings.length;
+  const total = areaBuildings.length;
   const done  = counts.done;
   const pct   = total > 0 ? Math.round((done / total) * 100) : 0;
 
@@ -1585,8 +1667,9 @@ function renderStats() {
 // ================================================================
 function renderFilters() {
   // Compute counts
-  const counts = { Kaikki: allBuildings.length, unvisited: 0, in_progress: 0, done: 0, no_access: 0 };
-  allBuildings.forEach(b => {
+  const areaBuildings = getAreaBuildings();
+  const counts = { Kaikki: areaBuildings.length, unvisited: 0, in_progress: 0, done: 0, no_access: 0 };
+  areaBuildings.forEach(b => {
     const s = b.computed_status || 'unvisited';
     if (s in counts) counts[s]++;
   });
@@ -1625,7 +1708,7 @@ function renderList() {
     rappusByBuilding.get(r.building_id).push(r);
   });
 
-  const visible = allBuildings.filter(b => {
+  const visible = getAreaBuildings().filter(b => {
     const status = b.computed_status || 'unvisited';
     if (currentFilter !== 'Kaikki' && status !== currentFilter) return false;
     if (searchQuery) {
@@ -2360,7 +2443,8 @@ document.getElementById('search-input').addEventListener('input', (e) => {
 // 18. BUTTON HANDLERS
 // ================================================================
 document.getElementById('btn-center').addEventListener('click', () => {
-  map.setView(CENTER, ZOOM);
+  const area = AREAS[currentArea] || AREAS.Kaikki;
+  map.setView(area.center, area.zoom);
 });
 
 document.getElementById('btn-refresh').addEventListener('click', () => {
